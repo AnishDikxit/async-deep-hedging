@@ -1,9 +1,10 @@
 #include <iostream>
 #include <vector>
-#include <cstdlib>   // For rand() and srand()
-#include <ctime>     // For time()
-#include <thread>    // For sleep
-#include <chrono>    // For milliseconds
+#include <queue>     // NEW: For priority_queue
+#include <cstdlib>
+#include <ctime>
+#include <thread>
+#include <chrono>
 
 using namespace std;
 
@@ -12,15 +13,23 @@ struct Order {
     int price;
     int quantity;
     bool is_buy;
+    long long execution_time; // NEW: When is this allowed to trade?
+};
+
+// NEW: This tells the priority_queue how to sort the orders.
+// We want a "Min-Heap", meaning the LOWEST execution_time is at the top.
+struct CompareOrder {
+    bool operator()(Order const& o1, Order const& o2) {
+        return o1.execution_time > o2.execution_time; 
+    }
 };
 
 vector<Order> bids; 
 vector<Order> asks;
 
+// This function hasn't changed! It's exactly your logic from Phase 1.
 void add_order(Order new_order) {
     if (new_order.is_buy) {
-        cout << "[Market] Incoming BUY  Order " << new_order.id << " willing to pay $" << new_order.price << "\n";
-        
         for (int i = 0; i < asks.size(); i++) {
             if (asks[i].price <= new_order.price) {
                 cout << "   -> TRADE EXECUTED! Buyer " << new_order.id 
@@ -30,12 +39,8 @@ void add_order(Order new_order) {
                 return; 
             }
         }
-        cout << "   -> No match found. Added to Bids.\n\n";
         bids.push_back(new_order); 
-        
     } else {
-        cout << "[Market] Incoming SELL Order " << new_order.id << " asking for $" << new_order.price << "\n";
-        
         for (int i = 0; i < bids.size(); i++) {
             if (bids[i].price >= new_order.price) {
                 cout << "   -> TRADE EXECUTED! Seller " << new_order.id 
@@ -45,39 +50,58 @@ void add_order(Order new_order) {
                 return; 
             }
         }
-        cout << "   -> No match found. Added to Asks.\n\n";
         asks.push_back(new_order); 
     }
 }
 
 int main() {
-    // 1. Initialize the Random Number Generator
     srand(time(0)); 
     
+    // NEW: Our Time Machine (The Waiting Room)
+    priority_queue<Order, vector<Order>, CompareOrder> latency_queue;
+
+    long long current_time = 0; // Our master clock (simulating milliseconds)
     int order_id_counter = 1;
-    int current_market_price = 100; // We anchor the market around $100
+    int current_market_price = 100;
 
-    cout << "--- Starting Live Market Simulation ---\n";
+    cout << "--- Starting Latent Market Simulation ---\n";
 
-    // 2. The Master Clock
     while (true) {
-        Order new_order;
-        new_order.id = order_id_counter++;
-        new_order.quantity = 10;
-        
-        // 3. Flip a coin: 50% chance to be a Buy, 50% chance to be a Sell
-        new_order.is_buy = (rand() % 2 == 0);
-        
-        // 4. Generate a random price close to $100 (between $98 and $102)
-        // This ensures the buyers and sellers actually cross paths and trade!
-        int price_fluctuation = (rand() % 5) - 2; 
-        new_order.price = current_market_price + price_fluctuation;
+        // 1. Advance the master clock by 1 millisecond
+        current_time++;
 
-        // 5. Send to your matching engine
-        add_order(new_order);
+        // 2. Randomly generate an order (only 20% of the time, to space things out)
+        if (rand() % 100 < 20) {
+            Order new_order;
+            new_order.id = order_id_counter++;
+            new_order.quantity = 10;
+            new_order.is_buy = (rand() % 2 == 0);
+            new_order.price = current_market_price + ((rand() % 5) - 2);
+            
+            // THE CORE LATENCY LOGIC
+            // We force this order to wait exactly 50 milliseconds before executing
+            new_order.execution_time = current_time + 50; 
+            
+            latency_queue.push(new_order);
+            
+            string side = new_order.is_buy ? "BUY " : "SELL";
+            cout << "[t=" << current_time << "] Received " << side << " Order " << new_order.id 
+                 << " at $" << new_order.price 
+                 << " -> Delayed until t=" << new_order.execution_time << "\n";
+        }
 
-        // 6. Pause for 500 milliseconds (half a second) so you can read it
-        this_thread::sleep_for(chrono::milliseconds(500));
+        // 3. Check the Queue: Is it time to release an order?
+        // We peek at the top order. If its time has come, we execute it!
+        while (!latency_queue.empty() && latency_queue.top().execution_time <= current_time) {
+            Order ready_order = latency_queue.top();
+            latency_queue.pop();
+            
+            cout << "\n[t=" << current_time << "] RELEASING Order " << ready_order.id << " into the market!\n";
+            add_order(ready_order); // NOW it finally hits your matching engine
+        }
+
+        // Slow down the terminal output so you can read it
+        this_thread::sleep_for(chrono::milliseconds(100));
     }
 
     return 0;
