@@ -89,7 +89,6 @@ int main() {
                  << " at $" << new_order.price 
                  << " -> Delayed until t=" << new_order.execution_time << "\n";
         }
-
         // 3. Check the Queue: Is it time to release an order?
         // We peek at the top order. If its time has come, we execute it!
         while (!latency_queue.empty() && latency_queue.top().execution_time <= current_time) {
