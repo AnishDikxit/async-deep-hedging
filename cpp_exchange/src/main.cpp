@@ -30,8 +30,8 @@ void add_order(Order new_order) {
     if (new_order.is_buy) {
         for (int i = 0; i < asks.size(); i++) {
             if (asks[i].price <= new_order.price) {
-                std::cout << "   -> [MATCH] Buyer " << new_order.id 
-                     << " bought from Seller " << asks[i].id << " at $" << asks[i].price << "\n\n";
+                // std::cout << "   -> [MATCH] Buyer " << new_order.id 
+                //      << " bought from Seller " << asks[i].id << " at $" << asks[i].price << "\n\n";
                 asks.erase(asks.begin() + i);
                 return; 
             }
@@ -40,8 +40,8 @@ void add_order(Order new_order) {
     } else {
         for (int i = 0; i < bids.size(); i++) {
             if (bids[i].price >= new_order.price) {
-                std::cout << "   -> [MATCH] Seller " << new_order.id 
-                     << " sold to Buyer " << bids[i].id << " at $" << bids[i].price << "\n\n";
+                // std::cout << "   -> [MATCH] Seller " << new_order.id 
+                //      << " sold to Buyer " << bids[i].id << " at $" << bids[i].price << "\n\n";
                 bids.erase(bids.begin() + i);
                 return; 
             }
@@ -102,9 +102,9 @@ int main() {
                 new_order.execution_time = current_time + 50; 
                 latency_queue.push(new_order);
                 
-                std::cout << "[t=" << current_time << "] Network Received Order: " 
-                     << (new_order.is_buy ? "BUY" : "SELL") << " at $" << price 
-                     << " (Delayed to t=" << new_order.execution_time << ")\n";
+                // std::cout << "[t=" << current_time << "] Network Received Order: " 
+                //      << (new_order.is_buy ? "BUY" : "SELL") << " at $" << price 
+                //      << " (Delayed to t=" << new_order.execution_time << ")\n";
             }
         }
         freeReplyObject(reply);
@@ -114,11 +114,11 @@ int main() {
             Order ready_order = latency_queue.top();
             latency_queue.pop();
             
-            std::cout << "[t=" << current_time << "] RELEASING delayed order " << ready_order.id << " into book!\n";
+            // std::cout << "[t=" << current_time << "] RELEASING delayed order " << ready_order.id << " into book!\n";
             add_order(ready_order); 
         }
 
-        std::this_thread::sleep_for(std::chrono::milliseconds(20)); // Run fast, but don't burn the CPU
+        // std::this_thread::sleep_for(std::chrono::milliseconds(20)); // Run fast, but don't burn the CPU
     }
 
     redisFree(c);
