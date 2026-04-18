@@ -9,8 +9,6 @@
 #include <sstream>
 #include <hiredis/hiredis.h> // NEW: The Redis C++ Library
 
-using namespace std;
-
 struct Order {
     int id;
     int price;
@@ -25,14 +23,14 @@ struct CompareOrder {
     }
 };
 
-vector<Order> bids; 
-vector<Order> asks;
+std::vector<Order> bids; 
+std::vector<Order> asks;
 
 void add_order(Order new_order) {
     if (new_order.is_buy) {
         for (int i = 0; i < asks.size(); i++) {
             if (asks[i].price <= new_order.price) {
-                cout << "   -> [MATCH] Buyer " << new_order.id 
+                std::cout << "   -> [MATCH] Buyer " << new_order.id 
                      << " bought from Seller " << asks[i].id << " at $" << asks[i].price << "\n\n";
                 asks.erase(asks.begin() + i);
                 return; 
@@ -42,7 +40,7 @@ void add_order(Order new_order) {
     } else {
         for (int i = 0; i < bids.size(); i++) {
             if (bids[i].price >= new_order.price) {
-                cout << "   -> [MATCH] Seller " << new_order.id 
+                std::cout << "   -> [MATCH] Seller " << new_order.id 
                      << " sold to Buyer " << bids[i].id << " at $" << bids[i].price << "\n\n";
                 bids.erase(bids.begin() + i);
                 return; 
@@ -58,18 +56,18 @@ int main() {
     // 1. CONNECT TO REDIS
     redisContext *c = redisConnect("127.0.0.1", 6379);
     if (c == NULL || c->err) {
-        if (c) { cout << "Redis Error: " << c->errstr << "\n"; redisFree(c); } 
-        else { cout << "Cannot allocate Redis context\n"; }
+        if (c) { std::cout << "Redis Error: " << c->errstr << "\n"; redisFree(c); } 
+        else { std::cout << "Cannot allocate Redis context\n"; }
         return 1;
     }
-    cout << "--- Successfully Connected to Redis ---\n";
+    std::cout << "--- Successfully Connected to Redis ---\n";
 
-    priority_queue<Order, vector<Order>, CompareOrder> latency_queue;
+    std::priority_queue<Order, std::vector<Order>, CompareOrder> latency_queue;
     long long current_time = 0; 
     int order_id_counter = 1;
     int current_market_price = 100;
 
-    cout << "--- Starting Async Market Simulator ---\n";
+    std::cout << "--- Starting Async Market Simulator ---\n";
 
     while (true) {
         current_time++;
@@ -88,8 +86,8 @@ int main() {
         redisReply *reply = (redisReply*)redisCommand(c, "LPOP incoming_orders");
         
         if (reply->type == REDIS_REPLY_STRING) {
-            string order_str = reply->str;
-            stringstream ss(order_str);
+            std::string order_str = reply->str;
+            std::stringstream ss(order_str);
             int price, is_buy_int;
             
             // Parse the string into an Order
@@ -104,7 +102,7 @@ int main() {
                 new_order.execution_time = current_time + 50; 
                 latency_queue.push(new_order);
                 
-                cout << "[t=" << current_time << "] Network Received Order: " 
+                std::cout << "[t=" << current_time << "] Network Received Order: " 
                      << (new_order.is_buy ? "BUY" : "SELL") << " at $" << price 
                      << " (Delayed to t=" << new_order.execution_time << ")\n";
             }
@@ -116,11 +114,11 @@ int main() {
             Order ready_order = latency_queue.top();
             latency_queue.pop();
             
-            cout << "[t=" << current_time << "] RELEASING delayed order " << ready_order.id << " into book!\n";
+            std::cout << "[t=" << current_time << "] RELEASING delayed order " << ready_order.id << " into book!\n";
             add_order(ready_order); 
         }
 
-        this_thread::sleep_for(chrono::milliseconds(20)); // Run fast, but don't burn the CPU
+        std::this_thread::sleep_for(std::chrono::milliseconds(20)); // Run fast, but don't burn the CPU
     }
 
     redisFree(c);
