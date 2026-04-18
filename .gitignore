@@ -1,3 +1,12 @@
 # executables
 *.exe
 venv/
+# Python cache
+__pycache__/
+*.py[cod]
+
+# PyTorch Model Weights
+*.pth
+
+# C++ Compiled Executables
+market_sim
