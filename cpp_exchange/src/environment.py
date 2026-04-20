@@ -31,7 +31,9 @@ class TradingEnvironment:
         
         # 2. Reset the portfolio
         self.current_step = 0
-        self.holdings = 0
+        # AI wakes up with anywhere from -500 (Short) to +500 (Long) shares
+        # It MUST trade to neutralize this risk before the Hawkes process kills it
+        self.holdings = random.choice([-500, -250, 250, 500])
         self.cash = self.starting_cash
         
         # 3. Wait for the first fresh price tick from C++ to anchor the state
