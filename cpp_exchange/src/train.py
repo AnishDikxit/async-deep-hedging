@@ -4,7 +4,7 @@ from environment import TradingEnvironment
 from agent import RLAgent
 
 # --- HYPERPARAMETERS ---
-TOTAL_EPISODES = 100         # Start small for Phase 1 (Sandbox Testing)
+TOTAL_EPISODES = 5000         # Start small for Phase 1 (Sandbox Testing)
 RISK_AVERSION_LAMBDA = 0.05  # The 'Fear' parameter for Entropic Risk
 
 def calculate_entropic_utility(raw_pnl, lambda_val):
