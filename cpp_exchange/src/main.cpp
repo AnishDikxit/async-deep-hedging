@@ -73,44 +73,75 @@ int main() {
     double hawkes_excitation = 0.0;  // The 'Panic' multiplier
     double alpha_jump = 0.15;        // How much panic is added per event
     double decay_rate = 0.98;        // How fast the market calms down
-    // 2. SIMULATE HAWKES PROCESS MARKET MOVEMENT
-        
-    // A. Decay the panic from the previous millisecond
-    hawkes_excitation *= decay_rate; 
-    double current_lambda = base_mu + hawkes_excitation;
 
-    // B. Roll the dice to see if a market event happens right now
-    if ((rand() % 1000) / 1000.0 < current_lambda) {
-        
-        // 1. Spike the excitation (The Self-Exciting property)
-        hawkes_excitation += alpha_jump;
+    while (true) {
+        // 1. INCREMENT TIME (Crucial for the latency queue)
+        current_time++;
 
-        // 2. Shift the mid-price based on the volatility
-        current_market_price += ((rand() % 5) - 2); 
-        
-        // 3. Flood the Order Book with dummy liquidity
-        // This creates the Execution Risk that punishes the AI's latency
-        int burst_orders = 2 + (rand() % 4); 
-        for (int i = 0; i < burst_orders; i++) {
-            Order dummy_order;
-            dummy_order.id = 999999; // Dummy identifier
-            dummy_order.quantity = 10;
-            dummy_order.is_buy = (rand() % 2 == 0);
+        // 2. SIMULATE HAWKES PROCESS MARKET MOVEMENT
+        hawkes_excitation *= decay_rate; 
+        double current_lambda = base_mu + hawkes_excitation;
+
+        if ((rand() % 1000) / 1000.0 < current_lambda) {
+            hawkes_excitation += alpha_jump;
+            current_market_price += ((rand() % 5) - 2); 
             
-            // Place dummy orders randomly around the spread
-            int spread = (rand() % 3) + 1;
-            dummy_order.price = dummy_order.is_buy ? 
-                                (current_market_price - spread) : 
-                                (current_market_price + spread);
-            
-            add_order(dummy_order);
+            int burst_orders = 2 + (rand() % 4); 
+            for (int i = 0; i < burst_orders; i++) {
+                Order dummy_order;
+                dummy_order.id = 999999; 
+                dummy_order.quantity = 10;
+                dummy_order.is_buy = (rand() % 2 == 0);
+                
+                int spread = (rand() % 3) + 1;
+                dummy_order.price = dummy_order.is_buy ? 
+                                    (current_market_price - spread) : 
+                                    (current_market_price + spread);
+                
+                add_order(dummy_order);
+            }
+
+            redisReply *pub_reply = (redisReply*)redisCommand(c, "PUBLISH market_data %d", current_market_price);
+            freeReplyObject(pub_reply);
         }
 
-        // 4. BROADCAST NEW PRICE TO PYTHON
-        redisReply *pub_reply = (redisReply*)redisCommand(c, "PUBLISH market_data %d", current_market_price);
-        freeReplyObject(pub_reply);
-    }
+        // 3. CHECK FOR INCOMING ORDERS FROM PYTHON (Restored!)
+        redisReply *reply = (redisReply*)redisCommand(c, "LPOP incoming_orders");
+        if (reply->type == REDIS_REPLY_STRING) {
+            std::string order_str = reply->str;
+            if (order_str == "RESET") {
+                bids.clear();
+                asks.clear();
+                // std::cout << "--- New Episode: Order Book Wiped Clean ---\n";
+            }
+            else{
+                std::stringstream ss(order_str);
+                int price, is_buy_int;
+                
+                if (ss >> price >> is_buy_int) {
+                    Order new_order;
+                    new_order.id = order_id_counter++;
+                    new_order.quantity = 10;
+                    new_order.price = price;
+                    new_order.is_buy = (is_buy_int == 1);
+                    
+                    new_order.execution_time = current_time + 50; 
+                    latency_queue.push(new_order);
+                }
+            }
+        }
+        freeReplyObject(reply);
 
+        // 4. PROCESS LATENCY QUEUE (Restored!)
+        while (!latency_queue.empty() && latency_queue.top().execution_time <= current_time) {
+            Order ready_order = latency_queue.top();
+            latency_queue.pop();
+            add_order(ready_order); 
+        }
+
+        // Optional: Keep CPU usage from maxing out during the infinite loop
+        // std::this_thread::sleep_for(std::chrono::microseconds(100)); 
+    }
     redisFree(c);
     return 0;
 }
