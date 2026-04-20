@@ -1,5 +1,6 @@
 import redis
 import numpy as np
+import random
 
 class TradingEnvironment:
     def __init__(self):
