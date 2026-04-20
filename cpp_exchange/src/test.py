@@ -5,83 +5,107 @@ from environment import TradingEnvironment
 from agent import RLAgent
 
 def test_agent():
-    print("Booting up the Evaluation Environment...")
+    print("Booting up the Advanced Evaluation Environment...")
     env = TradingEnvironment()
     agent = RLAgent()
     
     # --- 1. LOAD THE TRAINED BRAIN ---
     try:
         agent.policy_network.load_state_dict(torch.load("deep_hedging_weights.pth"))
-        agent.policy_network.eval() # Put PyTorch into 'Testing Mode' (disables learning algorithms)
+        agent.policy_network.eval() # Disable exploration
         print("Successfully loaded 'deep_hedging_weights.pth'.")
     except FileNotFoundError:
-        print("Error: Could not find weights file. Did you run train.py?")
+        print("Error: Could not find weights file. Waiting for training to finish.")
         return
 
-    # Data lists to feed into Matplotlib
+    # Data tracking arrays for thesis graphs
     history_prices = []
     history_holdings = []
+    history_actions = []
+    history_pnl = []
     
     state = env.reset()
-    episode_pnl = 0.0
     
-    print("\nRunning a 30-Day Deterministic Simulation...")
+    print(f"AI woke up with Forced Exposure: {env.holdings} shares.")
+    print("Running a 30-Day Deterministic Simulation...")
     
     # --- 2. PLAY ONE STRICT EPISODE ---
     while True:
-        # Record the current state of the world before the AI acts
         history_prices.append(env.current_price)
         history_holdings.append(env.holdings)
         
-        # Turn off PyTorch's memory tracking to speed up the loop
         with torch.no_grad():
             state_tensor = torch.FloatTensor(state).unsqueeze(0)
             action_probs = agent.policy_network(state_tensor)
             
-        # DETERMINISTIC ACTION: Pick the exact highest probability, no random sampling
+        # Deterministic execution (No dice rolls)
         action_index = torch.argmax(action_probs).item()
-        
-        # Map the index to the C++ commands
         action_mapping = [-1, 0, 1]
         best_action = action_mapping[action_index]
         
-        # Execute the action
+        history_actions.append(best_action)
+        
         next_state, reward, done = env.step(best_action)
+        
+        # Calculate Mark-to-Market PnL for this specific tick
+        current_mtm_value = env.cash + (env.holdings * env.current_price)
+        history_pnl.append(current_mtm_value - env.starting_cash) 
+        
         state = next_state
         
         if done:
-            episode_pnl = reward
+            print(f"Simulation Complete. Final PnL: ${reward:.2f}")
             break
             
-    print(f"Simulation Complete. Final PnL: ${episode_pnl:.2f}")
-    
     # --- 3. GENERATE THE THESIS GRAPHS ---
-    print("Generating Matplotlib visuals...")
+    print("Generating Quantitative Matplotlib visuals...")
     
-    # Create a visual figure with two stacked charts
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
+    # Create a 3-panel chart
+    fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(12, 10), sharex=True)
     
-    # Top Graph: The C++ Market Price
-    ax1.plot(history_prices, color='blue', linewidth=1.5, label='C++ Market Price')
-    ax1.set_title('Baseline Evaluation: Market Price vs. AI Inventory Holdings')
+    # --- Panel 1: Market Price & AI Actions ---
+    ax1.plot(history_prices, color='black', linewidth=1.2, label='Hawkes Market Price', alpha=0.8)
+    
+    # Overlay Buy/Sell markers
+    buy_x, buy_y, sell_x, sell_y = [], [], [], []
+    for t in range(len(history_actions)):
+        if history_actions[t] == 1:   # Buy
+            buy_x.append(t)
+            buy_y.append(history_prices[t])
+        elif history_actions[t] == -1: # Sell
+            sell_x.append(t)
+            sell_y.append(history_prices[t])
+            
+    ax1.scatter(buy_x, buy_y, color='green', marker='^', s=40, label='AI Buy Order', alpha=0.6)
+    ax1.scatter(sell_x, sell_y, color='red', marker='v', s=40, label='AI Sell Order', alpha=0.6)
+    
+    ax1.set_title('Deep Hedging: Execution in a Hawkes Volatility Market')
     ax1.set_ylabel('Price ($)')
     ax1.grid(True, alpha=0.3)
     ax1.legend(loc='upper left')
     
-    # Bottom Graph: The AI's Inventory Holdings
-    ax2.plot(history_holdings, color='red', linewidth=1.5, label='AI Inventory (Shares)')
-    ax2.axhline(0, color='black', linestyle='--', alpha=0.8) # The Delta-Neutral 'Zero' Line
-    ax2.set_xlabel('Time (Simulation Steps)')
-    ax2.set_ylabel('Inventory Count')
+    # --- Panel 2: The Delta-Neutral Dance (Inventory) ---
+    ax2.plot(history_holdings, color='blue', linewidth=1.5, label='AI Inventory Exposure')
+    ax2.axhline(0, color='red', linestyle='--', linewidth=1.5, label='Delta-Neutral (Zero Risk)')
+    
+    ax2.set_ylabel('Inventory (Shares)')
+    ax2.set_title('Predictive Hedging: Shedding Forced Exposure')
     ax2.grid(True, alpha=0.3)
     ax2.legend(loc='upper left')
     
-    plt.tight_layout()
+    # --- Panel 3: Cumulative PnL ---
+    ax3.plot(history_pnl, color='purple', linewidth=1.5, label='Mark-to-Market PnL')
+    ax3.axhline(0, color='black', linestyle='-', alpha=0.5)
     
-    # Save the graph to your folder and display it
-    plt.savefig("baseline_evaluation.png", dpi=300)
-    print("Graph successfully saved as 'baseline_evaluation.png'.")
-    plt.show()
+    ax3.set_xlabel('Time (Simulation Milliseconds)')
+    ax3.set_ylabel('PnL ($)')
+    ax3.set_title('Portfolio Mark-to-Market Value')
+    ax3.grid(True, alpha=0.3)
+    ax3.legend(loc='upper left')
+    
+    plt.tight_layout()
+    plt.savefig("thesis_quantitative_evaluation.png", dpi=300)
+    print("Graph successfully saved as 'thesis_quantitative_evaluation.png'.")
 
 if __name__ == "__main__":
     test_agent()
