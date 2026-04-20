@@ -8,6 +8,7 @@
 #include <string>
 #include <sstream>
 #include <hiredis/hiredis.h> // NEW: The Redis C++ Library
+#include <algorithm>
 
 struct Order {
     int id;
@@ -15,6 +16,7 @@ struct Order {
     int quantity;
     bool is_buy;
     long long execution_time; 
+    long long expiration_time; // NEW: The Time-To-Live timestamp
 };
 
 struct CompareOrder {
@@ -50,6 +52,27 @@ void add_order(Order new_order) {
         }
         asks.push_back(new_order); 
     }
+}
+
+void cleanup_expired_orders(long long current_time) {
+    // 1. Purge expired Bids
+    bids.erase(
+        std::remove_if(bids.begin(), bids.end(),
+            [current_time](const Order& o) { 
+                // Return true if the order has passed its expiration time
+                return o.expiration_time != 0 && o.expiration_time <= current_time; 
+            }),
+        bids.end()
+    );
+
+    // 2. Purge expired Asks
+    asks.erase(
+        std::remove_if(asks.begin(), asks.end(),
+            [current_time](const Order& o) { 
+                return o.expiration_time != 0 && o.expiration_time <= current_time; 
+            }),
+        asks.end()
+    );
 }
 
 int main() {
@@ -100,6 +123,9 @@ int main() {
                                     (current_market_price - spread) : 
                                     (current_market_price + spread);
                 
+                // NEW: Assign a random TTL. This order will self-destruct in 50 to 300 ticks.
+                dummy_order.expiration_time = current_time + 50 + (rand() % 250);
+                
                 add_order(dummy_order);
             }
 
@@ -127,7 +153,8 @@ int main() {
                     new_order.price = price;
                     new_order.is_buy = (is_buy_int == 1);
                     
-                    new_order.execution_time = current_time + 50; 
+                    new_order.execution_time = current_time + 50;
+                    new_order.expiration_time = 0;
                     latency_queue.push(new_order);
                 }
             }
@@ -140,7 +167,8 @@ int main() {
             latency_queue.pop();
             add_order(ready_order); 
         }
-
+        // 5. SWEEP THE ORDER BOOK FOR CANCELED/EXPIRED ORDERS
+        cleanup_expired_orders(current_time);
         // Optional: Keep CPU usage from maxing out during the infinite loop
         // std::this_thread::sleep_for(std::chrono::microseconds(100)); 
     }
