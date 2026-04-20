@@ -32,6 +32,7 @@ void add_order(Order new_order) {
             if (asks[i].price <= new_order.price) {
                 // std::cout << "   -> [MATCH] Buyer " << new_order.id 
                 //      << " bought from Seller " << asks[i].id << " at $" << asks[i].price << "\n\n";
+                if(new_order.id != 999999 && asks[i].id!=999999)continue;
                 asks.erase(asks.begin() + i);
                 return; 
             }
@@ -42,6 +43,7 @@ void add_order(Order new_order) {
             if (bids[i].price >= new_order.price) {
                 // std::cout << "   -> [MATCH] Seller " << new_order.id 
                 //      << " sold to Buyer " << bids[i].id << " at $" << bids[i].price << "\n\n";
+                if(new_order.id != 999999 && bids[i].id!=999999)continue;
                 bids.erase(bids.begin() + i);
                 return; 
             }
