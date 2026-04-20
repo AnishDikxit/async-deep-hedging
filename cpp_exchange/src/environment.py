@@ -35,6 +35,7 @@ class TradingEnvironment:
         self.cash = self.starting_cash
         
         # 3. Wait for the first fresh price tick from C++ to anchor the state
+        self.r.rpush("incoming_orders", "RESET")
         self.current_price = self._wait_for_next_tick()
         
         return self._get_state()
