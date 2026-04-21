@@ -7,6 +7,7 @@ __pycache__/
 
 # PyTorch Model Weights
 *.pth
+*.so
 
 # C++ Compiled Executables
 market_sim
