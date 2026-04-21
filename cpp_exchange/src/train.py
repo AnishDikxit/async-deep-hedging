@@ -3,6 +3,7 @@ import numpy as np
 from environment import TradingEnvironment
 from agent import RLAgent
 
+torch.set_num_threads(1)
 # --- HYPERPARAMETERS ---
 TOTAL_EPISODES = 4000         # Start small for Phase 1 (Sandbox Testing)
 RISK_AVERSION_LAMBDA = 0.05  # The 'Fear' parameter for Entropic Risk
