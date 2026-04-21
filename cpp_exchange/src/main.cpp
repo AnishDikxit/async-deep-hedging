@@ -110,7 +110,10 @@ int main() {
         if ((rand() % 1000) / 1000.0 < current_lambda) {
             hawkes_excitation += alpha_jump;
             current_market_price += ((rand() % 5) - 2); 
-            
+            // NEW: Prevent negative stock prices!
+            if (current_market_price < 1) {
+                current_market_price = 1;
+            }
             int burst_orders = 2 + (rand() % 4); 
             for (int i = 0; i < burst_orders; i++) {
                 Order dummy_order;
@@ -141,6 +144,16 @@ int main() {
                 bids.clear();
                 asks.clear();
                 // std::cout << "--- New Episode: Order Book Wiped Clean ---\n";
+                // NEW: Anchor the price back to $100 for PyTorch Normalization
+                current_market_price = 100; 
+                
+                // NEW: Calm the Hawkes panic down to zero
+                hawkes_excitation = 0.0; 
+                
+                // NEW: Clear the latency queue by swapping it with an empty one
+                latency_queue = std::priority_queue<Order, std::vector<Order>, CompareOrder>();
+                
+                // std::cout << "--- New Episode: Exchange Reset to Factory Settings ---\n";
             }
             else{
                 std::stringstream ss(order_str);

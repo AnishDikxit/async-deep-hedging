@@ -4,20 +4,25 @@ from environment import TradingEnvironment
 from agent import RLAgent
 
 # --- HYPERPARAMETERS ---
-TOTAL_EPISODES = 5000         # Start small for Phase 1 (Sandbox Testing)
+TOTAL_EPISODES = 100         # Start small for Phase 1 (Sandbox Testing)
 RISK_AVERSION_LAMBDA = 0.05  # The 'Fear' parameter for Entropic Risk
 
 def calculate_entropic_utility(raw_pnl, lambda_val):
     """
-    Transforms raw PnL into Risk-Adjusted Utility with Float Overflow Protection.
+    Transforms raw PnL into Risk-Adjusted Utility.
+    Uses the normalized formula to ensure positive rewards for profit 
+    and exponential penalties for drawdowns.
     """
-    # 1. Cap the PnL artificially to prevent catastrophic math overflow
-    clipped_pnl = np.clip(raw_pnl, -1000.0, 1000.0)
+    # 1. Scale down the PnL so the exponent doesn't explode
+    scaled_pnl = raw_pnl / 1000.0
     
-    # 2. Calculate the exponent and put a hard ceiling on it (max e^40)
+    # 2. Cap the PnL to prevent math overflow
+    clipped_pnl = np.clip(scaled_pnl, -100.0, 100.0)
+    
+    # 3. The Normalized Entropic Formula
     exponent = np.clip(-lambda_val * clipped_pnl, -40.0, 40.0)
+    utility = (1.0 - np.exp(exponent)) / lambda_val
     
-    utility = -np.exp(exponent)
     return float(utility)
 
 def train_agent():

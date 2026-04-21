@@ -44,43 +44,38 @@ class TradingEnvironment:
         return self._get_state()
 
     def step(self, action):
-        """
-        Executes the AI's chosen action, advances time by 1 tick, and calculates the reward.
-        Returns: (next_state, reward, done)
-        """
         self.current_step += 1
         
-        # --- 1. EXECUTE THE ACTION ---
-        # Action Mapping: 1 (Buy), -1 (Sell), 0 (Hold)
+        # --- 1. EXECUTE THE ACTION (With Slippage) ---
         if action == 1:
-            # Format: "PRICE IS_BUY" (e.g., "102 1")
             order_str = f"{int(self.current_price)} 1"
             self.r.lpush('incoming_orders', order_str)
             
-            # Assume instant fill for local accounting (C++ handles actual latency slippage)
             self.holdings += 10
-            self.cash -= (self.current_price * 10)
+            # PENALTY: Add $0.50 slippage/spread to the purchase price
+            self.cash -= ((self.current_price + 0.50) * 10) 
             
         elif action == -1:
             order_str = f"{int(self.current_price)} 0"
             self.r.lpush('incoming_orders', order_str)
             
             self.holdings -= 10
-            self.cash += (self.current_price * 10)
+            # PENALTY: Subtract $0.50 slippage/spread from the sell price
+            self.cash += ((self.current_price - 0.50) * 10)
 
         # --- 2. ADVANCE THE CLOCK ---
-        # Block and wait for the C++ engine to broadcast the next price movement
-        next_price = self._wait_for_next_tick()
-        self.current_price = next_price
+        self.current_price = self._wait_for_next_tick()
         
-        # --- 3. CALCULATE REWARD ---
-        # Mark-to-Market Portfolio Value
+        # --- 3. INVENTORY PENALTY (The Deep Hedging Core) ---
+        # The AI must bleed cash every single tick it holds an unhedged position
+        # A 500 share position squares to 250,000, multiplied by 0.001 = $250 bleed per tick
+        inventory_bleed = 0.001 * (self.holdings ** 2)
+        self.cash -= inventory_bleed
+        
+        # --- 4. CALCULATE REWARD ---
         portfolio_value = self.cash + (self.holdings * self.current_price)
-        
-        # The reward is the net profit/loss since the start of the episode
         reward = portfolio_value - self.starting_cash
         
-        # --- 4. CHECK TERMINATION ---
         done = self.current_step >= self.max_steps
         
         return self._get_state(), float(reward), done
@@ -96,8 +91,9 @@ class TradingEnvironment:
         # 1. Normalize Price: Assuming starting price is 100, and typical volatility moves it +/- 10
         norm_price = (self.current_price - 100.0) / 10.0 
         
-        # 2. Normalize Holdings: Assuming max position size is roughly 100 shares
-        norm_holdings = self.holdings / 100.0
+        # 2. Normalize Holdings: Assuming max position size during exploration could hit 5000
+        # This ensures +/- 500 starting exposure enters the brain cleanly as +/- 0.1
+        norm_holdings = self.holdings / 5000.0
         
         # 3. Normalize Time: Scale from [1000 -> 0] down to [1.0 -> 0.0]
         norm_time = time_remaining / self.max_steps
