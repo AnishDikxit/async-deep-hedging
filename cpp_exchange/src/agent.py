@@ -44,7 +44,7 @@ class RLAgent:
         self.policy_network = DeepHedgingModel()
         
         # The Optimizer (Adam) will adjust the weights later during training
-        self.optimizer = torch.optim.Adam(self.policy_network.parameters(), lr=0.001)
+        self.optimizer = torch.optim.Adam(self.policy_network.parameters(), lr=0.0001)
 
     def select_action(self, state_numpy):
         """
@@ -73,7 +73,7 @@ class RLAgent:
         
         # We also return the 'log probability' of the action. 
         # (David Silver's math requires this for the Policy Gradient update later).
-        return chosen_action, m.log_prob(action_index)
+        return chosen_action, m.log_prob(action_index), m.entropy()
 
 
 # ==========================================

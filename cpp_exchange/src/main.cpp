@@ -100,72 +100,29 @@ int main() {
     double decay_rate = 0.98;        // How fast the market calms down
 
     while (true) {
-        // 1. INCREMENT TIME (Crucial for the latency queue)
-        current_time++;
-
-        // 2. SIMULATE HAWKES PROCESS MARKET MOVEMENT
-        hawkes_excitation *= decay_rate; 
-        double current_lambda = base_mu + hawkes_excitation;
-
-        if ((rand() % 1000) / 1000.0 < current_lambda) {
-            hawkes_excitation += alpha_jump;
-            current_market_price += ((rand() % 5) - 2); 
-            // NEW: Prevent negative stock prices!
-            if (current_market_price < 1) {
-                current_market_price = 1;
-            }
-            int burst_orders = 2 + (rand() % 4); 
-            for (int i = 0; i < burst_orders; i++) {
-                Order dummy_order;
-                dummy_order.id = 999999; 
-                dummy_order.quantity = 10;
-                dummy_order.is_buy = (rand() % 2 == 0);
-                
-                int spread = (rand() % 3) + 1;
-                dummy_order.price = dummy_order.is_buy ? 
-                                    (current_market_price - spread) : 
-                                    (current_market_price + spread);
-                
-                // NEW: Assign a random TTL. This order will self-destruct in 50 to 300 ticks.
-                dummy_order.expiration_time = current_time + 50 + (rand() % 250);
-                
-                add_order(dummy_order);
-            }
-
-            redisReply *pub_reply = (redisReply*)redisCommand(c, "PUBLISH market_data %d", current_market_price);
-            freeReplyObject(pub_reply);
-        }
-
-        // 3. CHECK FOR INCOMING ORDERS FROM PYTHON (Restored!)
+        // --- 1. CHECK FOR INCOMING ORDERS FROM PYTHON (MOVED TO TOP) ---
         redisReply *reply = (redisReply*)redisCommand(c, "LPOP incoming_orders");
         if (reply->type == REDIS_REPLY_STRING) {
             std::string order_str = reply->str;
             if (order_str == "RESET") {
                 bids.clear();
                 asks.clear();
-                // std::cout << "--- New Episode: Order Book Wiped Clean ---\n";
-                // NEW: Anchor the price back to $100 for PyTorch Normalization
                 current_market_price = 100; 
-                
-                // NEW: Calm the Hawkes panic down to zero
                 hawkes_excitation = 0.0; 
-                
-                // NEW: Clear the latency queue by swapping it with an empty one
                 latency_queue = std::priority_queue<Order, std::vector<Order>, CompareOrder>();
-                
-                // std::cout << "--- New Episode: Exchange Reset to Factory Settings ---\n";
-            }
-            else{
+                // std::cout << "[EXCHANGE] Episode Reset! Price Anchored to $100.\n";
+                // NEW: Force-publish the clean price immediately so Python doesn't grab a stale tick!
+                redisReply *pub_reply = (redisReply*)redisCommand(c, "PUBLISH market_data %d", current_market_price);
+                freeReplyObject(pub_reply);
+            } else {
                 std::stringstream ss(order_str);
                 int price, is_buy_int;
-                
                 if (ss >> price >> is_buy_int) {
                     Order new_order;
                     new_order.id = order_id_counter++;
                     new_order.quantity = 10;
                     new_order.price = price;
                     new_order.is_buy = (is_buy_int == 1);
-                    
                     new_order.execution_time = current_time + 50;
                     new_order.expiration_time = 0;
                     latency_queue.push(new_order);
@@ -174,16 +131,44 @@ int main() {
         }
         freeReplyObject(reply);
 
-        // 4. PROCESS LATENCY QUEUE (Restored!)
+        // --- 2. INCREMENT TIME ---
+        current_time++;
+
+        // --- 3. SIMULATE HAWKES PROCESS MARKET MOVEMENT ---
+        hawkes_excitation *= decay_rate; 
+        double current_lambda = base_mu + hawkes_excitation;
+
+        if ((rand() % 1000) / 1000.0 < current_lambda) {
+            hawkes_excitation += alpha_jump;
+            current_market_price += ((rand() % 5) - 2); 
+            if (current_market_price < 1) current_market_price = 1;
+            
+            int burst_orders = 2 + (rand() % 4); 
+            for (int i = 0; i < burst_orders; i++) {
+                Order dummy_order;
+                dummy_order.id = 999999; 
+                dummy_order.quantity = 10;
+                dummy_order.is_buy = (rand() % 2 == 0);
+                int spread = (rand() % 3) + 1;
+                dummy_order.price = dummy_order.is_buy ? (current_market_price - spread) : (current_market_price + spread);
+                dummy_order.expiration_time = current_time + 50 + (rand() % 250);
+                add_order(dummy_order);
+            }
+            
+            // Because this happens AFTER the reset check, Python is guaranteed to get the clean $100 price!
+            redisReply *pub_reply = (redisReply*)redisCommand(c, "PUBLISH market_data %d", current_market_price);
+            freeReplyObject(pub_reply);
+        }
+
+        // --- 4. PROCESS LATENCY QUEUE ---
         while (!latency_queue.empty() && latency_queue.top().execution_time <= current_time) {
             Order ready_order = latency_queue.top();
             latency_queue.pop();
             add_order(ready_order); 
         }
-        // 5. SWEEP THE ORDER BOOK FOR CANCELED/EXPIRED ORDERS
+
+        // --- 5. SWEEP THE ORDER BOOK ---
         cleanup_expired_orders(current_time);
-        // Optional: Keep CPU usage from maxing out during the infinite loop
-        // std::this_thread::sleep_for(std::chrono::microseconds(100)); 
     }
     redisFree(c);
     return 0;

@@ -13,7 +13,7 @@ class TradingEnvironment:
         self.pubsub.subscribe('market_data')
         
         # Episode parameters
-        self.max_steps = 1000      # 1 episode = 1000 market ticks
+        self.max_steps = 250      # 1 episode = 1000 market ticks
         self.starting_cash = 10000.0
         
         # Tracking variables
@@ -21,24 +21,28 @@ class TradingEnvironment:
         self.holdings = 0
         self.cash = self.starting_cash
         self.current_price = 100.0
+        self.previous_portfolio_value = self.starting_cash # NEW
 
     def reset(self):
-        """
-        Starts a new trading episode (e.g., a new 30-day contract period).
-        Returns the initial State tensor.
-        """
-        # 1. Flush any leftover delayed orders in the network pipeline
+        # 1. Flush delayed orders
         self.r.delete('incoming_orders')
         
-        # 2. Reset the portfolio
+        # 2. AGGRESSIVELY flush the Python PubSub buffer of any stale prices
+        while True:
+            msg = self.pubsub.get_message(ignore_subscribe_messages=True)
+            if msg is None:
+                break
+        
+        # 3. Reset the portfolio
         self.current_step = 0
-        # AI wakes up with anywhere from -500 (Short) to +500 (Long) shares
-        # It MUST trade to neutralize this risk before the Hawkes process kills it
         self.holdings = random.choice([-500, -250, 250, 500])
         self.cash = self.starting_cash
+        self.previous_portfolio_value = self.starting_cash 
         
-        # 3. Wait for the first fresh price tick from C++ to anchor the state
+        # 4. Tell C++ to reset
         self.r.rpush("incoming_orders", "RESET")
+        
+        # 5. Wait for the FIRST fresh price
         self.current_price = self._wait_for_next_tick()
         
         return self._get_state()
@@ -73,38 +77,34 @@ class TradingEnvironment:
         self.cash -= inventory_bleed
         
         # --- 4. CALCULATE REWARD ---
+        # --- 4. CALCULATE DENSE REWARD ---
         portfolio_value = self.cash + (self.holdings * self.current_price)
-        reward = portfolio_value - self.starting_cash
+        
+        # Reward is exactly how much PnL was gained/lost ON THIS SPECIFIC TICK
+        step_reward = portfolio_value - self.previous_portfolio_value
+        self.previous_portfolio_value = portfolio_value
         
         done = self.current_step >= self.max_steps
         
-        return self._get_state(), float(reward), done
+        return self._get_state(), float(step_reward), done
 
     def _get_state(self):
-        """
-        Packages the environment variables into a standardized NumPy array.
-        CRITICAL: Normalizes all inputs to a [-1, 1] or [0, 1] range to prevent 
-        PyTorch Softmax saturation.
-        """
         time_remaining = self.max_steps - self.current_step
         
-        # 1. Normalize Price: Assuming starting price is 100, and typical volatility moves it +/- 10
+        # 1. Normalize Price (WITH A CLIPPING SHIELD)
+        # np.clip ensures that even if a stray 180 slips through, the AI never sees a number bigger than 5.0
         norm_price = (self.current_price - 100.0) / 10.0 
+        norm_price = np.clip(norm_price, -5.0, 5.0)
         
-        # 2. Normalize Holdings: Assuming max position size during exploration could hit 5000
-        # This ensures +/- 500 starting exposure enters the brain cleanly as +/- 0.1
-        norm_holdings = self.holdings / 5000.0
+        # 2. Normalize Holdings (AMPLIFY THE SIGNAL)
+        # Changing the denominator to 500.0. Now, an exposure of -500 sends a LOUD -1.0 signal to the AI.
+        norm_holdings = self.holdings / 500.0
+        norm_holdings = np.clip(norm_holdings, -5.0, 5.0)
         
-        # 3. Normalize Time: Scale from [1000 -> 0] down to [1.0 -> 0.0]
+        # 3. Normalize Time
         norm_time = time_remaining / self.max_steps
         
-        # State vector: [Normalized Price, Normalized Inventory, Normalized Time]
-        state = np.array([
-            norm_price, 
-            norm_holdings, 
-            norm_time
-        ], dtype=np.float32)
-        
+        state = np.array([norm_price, norm_holdings, norm_time], dtype=np.float32)
         return state
 
     def _wait_for_next_tick(self):
