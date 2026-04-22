@@ -2,14 +2,18 @@ import torch
 import numpy as np
 import matplotlib.pyplot as plt
 from environment import TradingEnvironment
-from agent import RLAgent
+
+# --- 1. THE FIX: Import the new PPO Architecture ---
+from agent import PPOAgent 
 
 def test_agent():
     print("Booting up the Advanced Evaluation Environment...")
     env = TradingEnvironment()
-    agent = RLAgent()
     
-    # --- 1. LOAD THE TRAINED BRAIN ---
+    # Instantiate the new dual-headed brain
+    agent = PPOAgent() 
+    
+    # --- 2. LOAD THE TRAINED BRAIN ---
     try:
         agent.policy_network.load_state_dict(torch.load("deep_hedging_weights.pth"))
         agent.policy_network.eval() # Lock the neural network parameters
@@ -29,15 +33,15 @@ def test_agent():
     print(f"AI woke up with Forced Exposure: {env.holdings} shares.")
     print("Running a 30-Day Deterministic Simulation...")
     
-    # --- 2. PLAY ONE STRICT EPISODE ---
+    # --- 3. PLAY ONE STRICT EPISODE ---
     while True:
         history_prices.append(env.current_price)
         history_holdings.append(env.holdings)
         
         # Turn off backpropagation math to save compute
         with torch.no_grad():
-            # Use the new test_mode flag for deterministic execution
-            best_action, _, _ = agent.select_action(state, test_mode=True)
+            # THE FIX: PPO select_action now returns 4 values!
+            best_action, _, _, _ = agent.select_action(state, test_mode=True)
             
         history_actions.append(best_action)
         
@@ -53,7 +57,7 @@ def test_agent():
             print(f"Simulation Complete. Final PnL: ${reward:.2f}")
             break
             
-    # --- 3. GENERATE THE VISUALS ---
+    # --- 4. GENERATE THE VISUALS ---
     print("Generating Quantitative Matplotlib visuals...")
     
     fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(12, 10), sharex=True)
