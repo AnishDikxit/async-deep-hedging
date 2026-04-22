@@ -1,11 +1,12 @@
 import torch
+import os
 import numpy as np
 from environment import TradingEnvironment
 from agent import RLAgent
 
 torch.set_num_threads(1)
 # --- HYPERPARAMETERS ---
-TOTAL_EPISODES = 4000         # Start small for Phase 1 (Sandbox Testing)
+TOTAL_EPISODES = 2000         # Start small for Phase 1 (Sandbox Testing)
 RISK_AVERSION_LAMBDA = 0.05  # The 'Fear' parameter for Entropic Risk
 
 def calculate_entropic_utility(raw_pnl, lambda_val):
@@ -31,6 +32,20 @@ def train_agent():
     env = TradingEnvironment()
     agent = RLAgent()
     
+    weights_path = "deep_hedging_weights.pth"
+    
+    # --- NEW: THE MEMORY INJECTION ---
+    if os.path.exists(weights_path):
+        print(f"[*] Found existing brain at '{weights_path}'")
+        try:
+            # Load the saved state dictionary into the neural network
+            agent.policy_network.load_state_dict(torch.load(weights_path))
+            print("[*] Successfully restored previous weights. Resuming training...")
+        except Exception as e:
+            print(f"[!] Error loading weights: {e}. Starting with a blank brain.")
+    else:
+        print("[*] No existing weights found. Training a blank brain from scratch.")
+        
     history_pnl = []
     
     for episode in range(1, TOTAL_EPISODES + 1):
@@ -73,6 +88,12 @@ def train_agent():
         returns = (returns - returns.mean()) / (returns.std() + 1e-9)
         
         # --- 3. REINFORCE BACKPROPAGATION ---
+        # --- 3. DYNAMIC SAVING ---
+        # Save a checkpoint every 500 episodes just in case the node crashes
+        if episode % 500 == 0:
+            torch.save(agent.policy_network.state_dict(), weights_path)
+            print(f"[*] Checkpoint saved at Episode {episode}")
+
         policy_loss = []
         for log_prob, G in zip(episode_log_probs, returns):
             policy_loss.append(-log_prob * G)
@@ -96,7 +117,7 @@ def train_agent():
             print(f"Episode {episode:04d} | Terminal PnL: ${terminal_pnl:8.2f} | Loss: {final_loss.item():8.2f}")
         
     print("\n--- Training Complete ---")
-    torch.save(agent.policy_network.state_dict(), "deep_hedging_weights.pth")
-    print("Model weights saved to 'deep_hedging_weights.pth'.")
+    torch.save(agent.policy_network.state_dict(), weights_path)
+    print("Training Complete. Final model weights saved.")
 if __name__ == "__main__":
     train_agent()

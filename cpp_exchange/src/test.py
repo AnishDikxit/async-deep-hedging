@@ -12,13 +12,13 @@ def test_agent():
     # --- 1. LOAD THE TRAINED BRAIN ---
     try:
         agent.policy_network.load_state_dict(torch.load("deep_hedging_weights.pth"))
-        agent.policy_network.eval() # Disable exploration
+        agent.policy_network.eval() # Lock the neural network parameters
         print("Successfully loaded 'deep_hedging_weights.pth'.")
     except FileNotFoundError:
         print("Error: Could not find weights file. Waiting for training to finish.")
         return
 
-    # Data tracking arrays for thesis graphs
+    # Data tracking arrays for quantitative graphs
     history_prices = []
     history_holdings = []
     history_actions = []
@@ -34,15 +34,11 @@ def test_agent():
         history_prices.append(env.current_price)
         history_holdings.append(env.holdings)
         
+        # Turn off backpropagation math to save compute
         with torch.no_grad():
-            state_tensor = torch.FloatTensor(state).unsqueeze(0)
-            action_probs = agent.policy_network(state_tensor)
+            # Use the new test_mode flag for deterministic execution
+            best_action, _, _ = agent.select_action(state, test_mode=True)
             
-        # Deterministic execution (No dice rolls)
-        action_index = torch.argmax(action_probs).item()
-        action_mapping = [-1, 0, 1]
-        best_action = action_mapping[action_index]
-        
         history_actions.append(best_action)
         
         next_state, reward, done = env.step(best_action)
@@ -57,22 +53,20 @@ def test_agent():
             print(f"Simulation Complete. Final PnL: ${reward:.2f}")
             break
             
-    # --- 3. GENERATE THE THESIS GRAPHS ---
+    # --- 3. GENERATE THE VISUALS ---
     print("Generating Quantitative Matplotlib visuals...")
     
-    # Create a 3-panel chart
     fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(12, 10), sharex=True)
     
     # --- Panel 1: Market Price & AI Actions ---
     ax1.plot(history_prices, color='black', linewidth=1.2, label='Hawkes Market Price', alpha=0.8)
     
-    # Overlay Buy/Sell markers
     buy_x, buy_y, sell_x, sell_y = [], [], [], []
     for t in range(len(history_actions)):
-        if history_actions[t] == 1:   # Buy
+        if history_actions[t] == 1:   
             buy_x.append(t)
             buy_y.append(history_prices[t])
-        elif history_actions[t] == -1: # Sell
+        elif history_actions[t] == -1: 
             sell_x.append(t)
             sell_y.append(history_prices[t])
             
