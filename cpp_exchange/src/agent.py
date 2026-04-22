@@ -4,89 +4,103 @@ import torch.nn.functional as F
 from torch.distributions import Categorical
 import numpy as np
 
-# Import the environment we just built
 from environment import TradingEnvironment
 
-class DeepHedgingModel(nn.Module):
-    def __init__(self, input_dim=3, hidden_dim=64, output_dim=3):
+class ActorCriticModel(nn.Module):
+    def __init__(self, input_dim=3, hidden_dim=64, action_dim=3):
         """
-        The mathematical architecture of the Neural Network.
-        Input: [Price, Holdings, Time] (Size: 3)
-        Output: Probabilities for [Sell, Hold, Buy] (Size: 3)
+        The Dual-Headed PPO Network.
+        Input: [Price, Holdings, Time]
+        Outputs: 
+          1. Action Probabilities (The Actor)
+          2. State Value / Expected PnL (The Critic)
         """
-        super(DeepHedgingModel, self).__init__()
+        super(ActorCriticModel, self).__init__()
         
-        self.fc1 = nn.Linear(input_dim, hidden_dim)
-        self.fc2 = nn.Linear(hidden_dim, hidden_dim)
-        self.action_head = nn.Linear(hidden_dim, output_dim)
+        # Shared Market Representation Layer
+        self.shared_layer = nn.Linear(input_dim, hidden_dim)
+        
+        # --- THE ACTOR HEAD ---
+        self.actor_hidden = nn.Linear(hidden_dim, hidden_dim)
+        self.actor_out = nn.Linear(hidden_dim, action_dim)
+        
+        # --- THE CRITIC HEAD ---
+        self.critic_hidden = nn.Linear(hidden_dim, hidden_dim)
+        self.critic_out = nn.Linear(hidden_dim, 1) # Outputs a single number (Expected PnL)
 
     def forward(self, state):
-        """
-        Defines how data flows through the network.
-        """
-        x = F.relu(self.fc1(state))
-        x = F.relu(self.fc2(x))
-        action_probs = F.softmax(self.action_head(x), dim=-1)
+        # 1. Process the raw market state
+        shared_features = F.relu(self.shared_layer(state))
         
-        return action_probs
+        # 2. Actor decides what to do
+        actor_x = F.relu(self.actor_hidden(shared_features))
+        action_probs = F.softmax(self.actor_out(actor_x), dim=-1)
+        
+        # 3. Critic predicts the future
+        critic_x = F.relu(self.critic_hidden(shared_features))
+        state_value = self.critic_out(critic_x)
+        
+        return action_probs, state_value
 
-class RLAgent:
-    def __init__(self):
-        self.policy_network = DeepHedgingModel()
-        self.optimizer = torch.optim.Adam(self.policy_network.parameters(), lr=0.0001)
+class PPOAgent:
+    def __init__(self, learning_rate=3e-4):
+        self.policy_network = ActorCriticModel()
+        self.optimizer = torch.optim.Adam(self.policy_network.parameters(), lr=learning_rate)
 
     def select_action(self, state_numpy, test_mode=False):
         """
-        Takes the NumPy array from the environment, feeds it to the Brain, 
-        and decides what to do.
+        Called during the simulation loop to pick an action and record the Critic's prediction.
         """
         state_tensor = torch.FloatTensor(state_numpy).unsqueeze(0)
-        action_probs = self.policy_network(state_tensor)
+        
+        with torch.no_grad(): # No backprop during the data collection phase!
+            action_probs, state_value = self.policy_network(state_tensor)
         
         if test_mode:
-            # OUT-OF-SAMPLE MODE: Strictly pick the highest probability action
             action_index = torch.argmax(action_probs)
             log_prob, entropy = None, None
         else:
-            # TRAINING MODE: Sample from the distribution to encourage exploration
             m = Categorical(action_probs)
             action_index = m.sample()
             log_prob = m.log_prob(action_index)
             entropy = m.entropy()
-        
-        # Map the index back to our C++ network commands:
+            
         action_mapping = [-1, 0, 1]
         chosen_action = action_mapping[action_index.item()]
         
-        return chosen_action, log_prob, entropy
+        # We now return the Critic's value alongside the action
+        return chosen_action, log_prob, entropy, state_value.squeeze()
 
+    def evaluate(self, states, actions):
+        """
+        NEW FOR PPO: Called during the backpropagation update to grade past actions.
+        """
+        action_probs, state_values = self.policy_network(states)
+        dist = Categorical(action_probs)
+        
+        # Map our [-1, 0, 1] actions back to PyTorch indices [0, 1, 2] for the math
+        action_indices = []
+        for a in actions:
+            if a == -1: action_indices.append(0)
+            elif a == 0: action_indices.append(1)
+            elif a == 1: action_indices.append(2)
+        action_indices_tensor = torch.tensor(action_indices)
+        
+        action_logprobs = dist.log_prob(action_indices_tensor)
+        dist_entropy = dist.entropy()
+        
+        return action_logprobs, state_values.squeeze(), dist_entropy
 
 # ==========================================
-# LOCAL TESTING BLOCK
+# SANITY CHECK
 # ==========================================
 if __name__ == "__main__":
-    import time
-    
-    print("Booting up the PyTorch Brain...")
-    agent = RLAgent()
-    
-    print("Connecting to the C++ World...")
+    print("Booting up the Actor-Critic Brain...")
+    agent = PPOAgent()
     env = TradingEnvironment()
-    
     state = env.reset()
     
-    print("\n--- Running AI Integration Test (10 Steps) ---")
-    for step in range(10):
-        action, log_prob, _ = agent.select_action(state)
-        
-        print(f"Step {step+1}:")
-        print(f"  State Tensor In: {state}")
-        print(f"  AI Chose Action: {action}")
-        
-        next_state, reward, done = env.step(action)
-        print(f"  Resulting PnL:   ${reward:.2f}\n")
-        
-        state = next_state
-        time.sleep(0.5)
-        
-    print("AI successfully mapped states to actions.")
+    action, log_prob, _, state_value = agent.select_action(state)
+    print(f"Market State: {state}")
+    print(f"Actor chose Action: {action}")
+    print(f"Critic predicts terminal PnL of: ${state_value.item():.2f}")
