@@ -35,16 +35,17 @@ class TradingEnvironment:
         self.current_step += 1
         
         # --- 1. SEND ORDER TO C++ ENGINE ---
+        ticket_fee = 1.00 # A flat $1.00 penalty for crossing the spread
+        
         if action == 1:
             self.engine.place_order(int(self.current_price), True)
             self.holdings += 10
-            self.cash -= ((self.current_price + 0.50) * 10) 
+            self.cash -= (((self.current_price + 0.50) * 10) + ticket_fee) 
             
         elif action == -1:
             self.engine.place_order(int(self.current_price), False)
             self.holdings -= 10
-            self.cash += ((self.current_price - 0.50) * 10)
-
+            self.cash += (((self.current_price - 0.50) * 10) - ticket_fee)
         # --- 2. ADVANCE THE C++ CLOCK ---
         # This instantly runs the C++ loop and returns the new price
         self.current_price = self.engine.step()
