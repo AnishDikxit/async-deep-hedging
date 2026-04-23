@@ -50,8 +50,15 @@ class TradingEnvironment:
         # This instantly runs the C++ loop and returns the new price
         self.current_price = self.engine.step()
         
-        # --- 3. INVENTORY PENALTY ---
-        inventory_bleed = 0.001 * (self.holdings ** 2)
+        # --- 3. INVENTORY PENALTY (WITH TOLERANCE BAND) ---
+        # The AI pays ZERO penalty if holdings are between -30 and +30
+        if abs(self.holdings) <= 30:
+            inventory_bleed = 0.0
+        else:
+            # Only penalize the excess exposure beyond the safe band
+            excess_exposure = abs(self.holdings) - 30
+            inventory_bleed = 0.001 * (excess_exposure ** 2)
+            
         self.cash -= inventory_bleed
         
         # --- 4. CALCULATE DENSE REWARD ---
