@@ -18,6 +18,7 @@ class TradingEnvironment:
         self.engine.reset()
         self.current_step = 0
         self.holdings = random.choice([-500, -250, 250, 500])
+        self.in_flight_exposure = 0  # NEW: Track pending shares
         self.cash = self.starting_cash
         self.previous_portfolio_value = self.starting_cash 
         
@@ -34,10 +35,12 @@ class TradingEnvironment:
         # --- 1. SEND ORDER TO C++ ENGINE (NO INSTANT GRATIFICATION) ---
         if action == 1:
             self.engine.place_order(int(self.current_price), True)
+            self.in_flight_exposure += 10 # Log the pending buy
             # CRITICAL REMOVAL: We no longer update holdings or cash here!
             
         elif action == -1:
             self.engine.place_order(int(self.current_price), False)
+            self.in_flight_exposure -= 10 # Log the pending sell
             # CRITICAL REMOVAL: We no longer update holdings or cash here!
 
         # --- 2. ADVANCE THE CLOCK AND RECEIVE THE LEDGER ---
@@ -48,10 +51,12 @@ class TradingEnvironment:
         for fill in executed_fills:
             if fill.is_buy:
                 self.holdings += fill.quantity
+                self.in_flight_exposure -= fill.quantity # Remove from pending
                 # Notice we use fill.execution_price (the price 50ms later), NOT self.current_price
                 self.cash -= (((fill.execution_price + 0.50) * fill.quantity) + ticket_fee)
             else:
                 self.holdings -= fill.quantity
+                self.in_flight_exposure += fill.quantity # Remove from pending
                 self.cash += (((fill.execution_price - 0.50) * fill.quantity) - ticket_fee)
         
         # --- 4. INVENTORY PENALTY (TOLERANCE BAND) ---
@@ -77,5 +82,7 @@ class TradingEnvironment:
         norm_price = np.clip((self.current_price - 100.0) / 10.0, -5.0, 5.0)
         norm_holdings = np.clip(self.holdings / 500.0, -5.0, 5.0)
         norm_time = time_remaining / self.max_steps
-        
-        return np.array([norm_price, norm_holdings, norm_time], dtype=np.float32)
+        # NEW: Normalize the pending exposure
+        norm_in_flight = np.clip(self.in_flight_exposure / 500.0, -5.0, 5.0)
+        # Return a 4-feature state
+        return np.array([norm_price, norm_holdings, norm_time, norm_in_flight], dtype=np.float32)
