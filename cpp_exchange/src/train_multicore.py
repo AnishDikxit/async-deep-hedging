@@ -7,7 +7,7 @@ from environment import TradingEnvironment
 from agent import PPOAgentLSTM # Using the new LSTM Brain!
 
 # --- HYPERPARAMETERS ---
-TOTAL_EPISODES = 4000
+TOTAL_EPISODES = 8000
 NUM_CORES = 10 
 RISK_AVERSION_LAMBDA = 0.05
 PPO_EPOCHS = 4           
@@ -24,7 +24,7 @@ def calculate_entropic_utility(raw_pnl, lambda_val):
 def worker_process(worker_id):
     torch.set_num_threads(1) 
     env = TradingEnvironment()
-    agent = PPOAgentLSTM(learning_rate=3e-4)
+    agent = PPOAgentLSTM(learning_rate=1e-4)
     
     weights_path = f"weights_core_{worker_id}.pth"
     if os.path.exists(weights_path):
@@ -98,7 +98,7 @@ def worker_process(worker_id):
                     actor_loss = -torch.min(surr1, surr2).mean()
                     critic_loss = nn.MSELoss()(state_values, returns)
                     
-                    loss = actor_loss + 0.5 * critic_loss - 0.01 * dist_entropy.mean()
+                    loss = actor_loss + 0.5 * critic_loss - 0.05 * dist_entropy.mean()
                     
                     agent.optimizer.zero_grad()
                     loss.backward()

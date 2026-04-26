@@ -3,17 +3,16 @@ import numpy as np
 import matplotlib.pyplot as plt
 from environment import TradingEnvironment
 
-# --- 1. THE FIX: Import the new PPO Architecture ---
-from agent import PPOAgent 
+# THE FIX: Import the Recurrent Brain
+from agent import PPOAgentLSTM 
 
 def test_agent():
-    print("Booting up the Advanced Evaluation Environment...")
+    print("Booting up the Asynchronous Evaluation Environment...")
     env = TradingEnvironment()
     
-    # Instantiate the new dual-headed brain
-    agent = PPOAgent() 
+    # Instantiate the new LSTM brain
+    agent = PPOAgentLSTM() 
     
-    # --- 2. LOAD THE TRAINED BRAIN ---
     try:
         agent.policy_network.load_state_dict(torch.load("deep_hedging_weights.pth"))
         agent.policy_network.eval() # Lock the neural network parameters
@@ -22,7 +21,7 @@ def test_agent():
         print("Error: Could not find weights file. Waiting for training to finish.")
         return
 
-    # Data tracking arrays for quantitative graphs
+    # Data tracking arrays
     history_prices = []
     history_holdings = []
     history_actions = []
@@ -30,35 +29,36 @@ def test_agent():
     
     state = env.reset()
     
-    print(f"AI woke up with Forced Exposure: {env.holdings} shares.")
-    print("Running a 30-Day Deterministic Simulation...")
+    # THE FIX: Initialize the LSTM's blank memory
+    hidden = agent.get_initial_hidden()
     
-    # --- 3. PLAY ONE STRICT EPISODE ---
+    print(f"AI woke up with Forced Exposure: {env.holdings} shares.")
+    print("Running a 1,000-Tick Asynchronous Simulation...")
+    
     while True:
         history_prices.append(env.current_price)
         history_holdings.append(env.holdings)
         
-        # Turn off backpropagation math to save compute
         with torch.no_grad():
-            # THE FIX: PPO select_action now returns 4 values!
-            best_action, _, _, _ = agent.select_action(state, test_mode=True)
+            # THE FIX: Pass the hidden state in, and receive the updated hidden state back
+            best_action, _, _, _, hidden = agent.select_action(state, hidden, test_mode=True)
             
         history_actions.append(best_action)
         
         next_state, reward, done = env.step(best_action)
         
-        # Calculate Mark-to-Market PnL for this specific tick
+        # Calculate Mark-to-Market PnL
         current_mtm_value = env.cash + (env.holdings * env.current_price)
         history_pnl.append(current_mtm_value - env.starting_cash) 
         
         state = next_state
         
         if done:
-            print(f"Simulation Complete. Final PnL: ${reward:.2f}")
+            print(f"Simulation Complete. Final MTM PnL: ${history_pnl[-1]:.2f}")
             break
             
-    # --- 4. GENERATE THE VISUALS ---
-    print("Generating Quantitative Matplotlib visuals...")
+    # --- GENERATE THE VISUALS ---
+    print("Generating Asynchronous Matplotlib visuals...")
     
     fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(12, 10), sharex=True)
     
@@ -74,10 +74,10 @@ def test_agent():
             sell_x.append(t)
             sell_y.append(history_prices[t])
             
-    ax1.scatter(buy_x, buy_y, color='green', marker='^', s=40, label='AI Buy Order', alpha=0.6)
-    ax1.scatter(sell_x, sell_y, color='red', marker='v', s=40, label='AI Sell Order', alpha=0.6)
+    ax1.scatter(buy_x, buy_y, color='green', marker='^', s=40, label='AI Buy Order Sent (Delayed Fill)', alpha=0.6)
+    ax1.scatter(sell_x, sell_y, color='red', marker='v', s=40, label='AI Sell Order Sent (Delayed Fill)', alpha=0.6)
     
-    ax1.set_title('Deep Hedging: Execution in a Hawkes Volatility Market')
+    ax1.set_title('Deep Hedging v2.0: Asynchronous Execution in a Hawkes Market')
     ax1.set_ylabel('Price ($)')
     ax1.grid(True, alpha=0.3)
     ax1.legend(loc='upper left')
@@ -87,7 +87,7 @@ def test_agent():
     ax2.axhline(0, color='red', linestyle='--', linewidth=1.5, label='Delta-Neutral (Zero Risk)')
     
     ax2.set_ylabel('Inventory (Shares)')
-    ax2.set_title('Predictive Hedging: Shedding Forced Exposure')
+    ax2.set_title('Predictive Hedging: Shedding Exposure via 50ms Latency Queue')
     ax2.grid(True, alpha=0.3)
     ax2.legend(loc='upper left')
     
@@ -97,13 +97,13 @@ def test_agent():
     
     ax3.set_xlabel('Time (Simulation Milliseconds)')
     ax3.set_ylabel('PnL ($)')
-    ax3.set_title('Portfolio Mark-to-Market Value')
+    ax3.set_title('Portfolio Mark-to-Market Value (Factoring Slippage)')
     ax3.grid(True, alpha=0.3)
     ax3.legend(loc='upper left')
     
     plt.tight_layout()
-    plt.savefig("thesis_quantitative_evaluation.png", dpi=300)
-    print("Graph successfully saved as 'thesis_quantitative_evaluation.png'.")
+    plt.savefig("thesis_v2_asynchronous_evaluation.png", dpi=300)
+    print("Graph successfully saved as 'thesis_v2_asynchronous_evaluation.png'.")
 
 if __name__ == "__main__":
     test_agent()
