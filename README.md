@@ -108,7 +108,7 @@ Rₜ = ΔPnLₜ − λ · max(0, |Iₜ| − B)²
 
 ### 1. C++ Hawkes Matching Engine
 
-The core simulation runs entirely in compiled C++ (`src/cpp_exchange.cpp`) for microsecond-level throughput. Each `step()` call advances the Hawkes intensity function, fires stochastic market events, drains the **50ms latency queue** — applying execution prices from `t + 50ms`, not the decision price (this is where **slippage is realized**) — and returns `(new_price, list[FillReport])` to Python.
+The core simulation runs entirely in compiled C++ (`src/exchange.cpp`) for microsecond-level throughput. Each `step()` call advances the Hawkes intensity function, fires stochastic market events, drains the **50ms latency queue** — applying execution prices from `t + 50ms`, not the decision price (this is where **slippage is realized**) — and returns `(new_price, list[FillReport])` to Python.
 
 Simulation economics: starting cash `$10,000`, initial price `$100`, spread slippage `$0.50/share`, exchange ticket fee `$1.00/order`. Mark-to-Market value: `MtMₜ = Cashₜ + (Iₜ × Pₜ)`
 
@@ -116,7 +116,7 @@ Simulation economics: starting cash `$10,000`, initial price `$100`, spread slip
 
 The baseline architecture operates as a strict MDP — zero latency, instantaneous execution.
 
-![God Mode Architecture](assets/God_Mode_Loop_drawio.png)
+![God Mode Architecture](assets/God_Mode_Loop.drawio.png)
 
 **Topology:** Shared feature extractor (two Dense-64 layers, Layer Normalization + ReLU) splits into an Actor head (Softmax → `{Buy, Sell, Hold}`) and Critic head (Linear → scalar `V(s)`).
 
@@ -128,7 +128,7 @@ The baseline architecture operates as a strict MDP — zero latency, instantaneo
 
 Introducing the 50ms execution queue triggers complete policy collapse in the v1.0 agent. The solution requires both an expanded sensor array and recurrent memory.
 
-![v2 Architecture](assets/v2_architecture_drawio.png)
+![v2 Architecture](assets/v2_architecture.drawio.png)
 
 **Expanded state vector:** `Sₜ = [Pₜ, Iₜ, Tₜ, Eₜ]` — `Eₜ` is `in_flight_exposure`, the net cumulative value of all pending-but-unfilled orders currently sitting in the 50ms queue.
 
