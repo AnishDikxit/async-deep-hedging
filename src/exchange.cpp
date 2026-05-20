@@ -4,10 +4,12 @@
 #include <cstdlib>
 #include <ctime>
 #include <algorithm>
-#include <pybind11/pybind11.h> // The Pybind11 Magic
+#include <pybind11/pybind11.h>
+#include <pybind11/stl.h> // CRITICAL: Allows returning vectors and pairs to Python
 
 namespace py = pybind11;
 
+// --- DATA STRUCTURES ---
 struct Order {
     int id;
     int price;
@@ -15,6 +17,14 @@ struct Order {
     bool is_buy;
     long long execution_time; 
     long long expiration_time;
+};
+
+// NEW: The exact receipt of execution sent back to Python
+struct FillReport {
+    int order_id;
+    int execution_price;
+    int quantity;
+    bool is_buy;
 };
 
 struct CompareOrder {
@@ -34,7 +44,6 @@ private:
     int current_market_price;
     double hawkes_excitation;
 
-    // Hawkes Constants
     const double base_mu = 0.02;           
     const double alpha_jump = 0.15;        
     const double decay_rate = 0.98;        
@@ -84,7 +93,6 @@ public:
         hawkes_excitation = 0.0;
     }
 
-    // Python will call this when the AI wants to trade
     void place_order(int price, bool is_buy) {
         Order new_order;
         new_order.id = order_id_counter++;
@@ -92,15 +100,15 @@ public:
         new_order.price = price;
         new_order.is_buy = is_buy;
         new_order.execution_time = current_time + 50; // 50ms simulated latency
-        new_order.expiration_time = 0; // GTC
+        new_order.expiration_time = 0; 
         latency_queue.push(new_order);
     }
 
-    // Python will call this to advance the market by 1 millisecond
-    int step() {
+    // NEW: Returns a Pair -> (New Market Price, List of Executed Orders)
+    std::pair<int, std::vector<FillReport>> step() {
         current_time++;
 
-        // 1. Hawkes Process
+        // 1. Hawkes Process (Market Mutates)
         hawkes_excitation *= decay_rate; 
         double current_lambda = base_mu + hawkes_excitation;
 
@@ -122,23 +130,43 @@ public:
             }
         }
 
-        // 2. Process Latency Queue
+        std::vector<FillReport> executed_fills;
+
+        // 2. Process Latency Queue (Slippage happens here!)
         while (!latency_queue.empty() && latency_queue.top().execution_time <= current_time) {
             Order ready_order = latency_queue.top();
             latency_queue.pop();
-            add_order(ready_order); 
+            
+            // If it is the AI's order (not a dummy order), it executes at the CURRENT mutated price
+            if (ready_order.id != 999999) {
+                FillReport report;
+                report.order_id = ready_order.id;
+                report.execution_price = current_market_price; // The price 50ms LATER
+                report.quantity = ready_order.quantity;
+                report.is_buy = ready_order.is_buy;
+                executed_fills.push_back(report);
+            } else {
+                add_order(ready_order); 
+            }
         }
 
         // 3. Sweep
-        if(current_time % 50 ==0)cleanup_expired_orders();
+        if(current_time % 50 == 0) cleanup_expired_orders();
 
-        return current_market_price;
+        return std::make_pair(current_market_price, executed_fills);
     }
 };
 
 // --- PYBIND11 MODULE BINDINGS ---
 PYBIND11_MODULE(cpp_exchange, m) {
-    m.doc() = "Zero-Latency C++ Market Simulator for PyTorch";
+    m.doc() = "Asynchronous C++ Market Simulator for PyTorch";
+
+    // Expose the FillReport struct so Python can read its attributes
+    py::class_<FillReport>(m, "FillReport")
+        .def_readonly("order_id", &FillReport::order_id)
+        .def_readonly("execution_price", &FillReport::execution_price)
+        .def_readonly("quantity", &FillReport::quantity)
+        .def_readonly("is_buy", &FillReport::is_buy);
 
     py::class_<MarketSimulator>(m, "MarketSimulator")
         .def(py::init<>())
