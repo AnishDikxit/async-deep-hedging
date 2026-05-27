@@ -122,7 +122,7 @@ The baseline architecture operates as a strict MDP — zero latency, instantaneo
 
 **State vector:** `Sₜ = [Pₜ, Iₜ, Tₜ]` — normalized price, normalized inventory, time remaining.
 
-**Training:** 4,000 episodes across the distributed multi-core pipeline. The agent learns to drift freely within the ±30 share Tolerance Band, only crossing the spread when Hawkes volatility forces inventory into the quadratic penalty zone.
+**Training:** 8,000 episodes per core across the 10-core distributed ensemble. The agent learns to drift freely within the ±30 share Tolerance Band, only crossing the spread when Hawkes volatility forces inventory into the quadratic penalty zone.
 
 ### 3. v2.0 — Asynchronous POMDP (PPO-LSTM)
 
@@ -184,7 +184,8 @@ The rigid sawtooth pattern is replaced by a **tightening oscillating wave** — 
 | Parameter | Value |
 |-----------|-------|
 | Optimizer | Adam |
-| Learning Rate (η) | 3 × 10⁻⁴ |
+| Learning Rate (η) — `train_multicore.py` | 1 × 10⁻⁴ |
+| Learning Rate (η) — `train.py` (v1.0) | 3 × 10⁻⁴ |
 | Discount Factor (γ) | 0.99 |
 | PPO Clipping Parameter (ε) | 0.2 |
 | Entropy Coefficient | 0.01 |
@@ -196,7 +197,7 @@ The rigid sawtooth pattern is replaced by a **tightening oscillating wave** — 
 | Exchange Ticket Fee | $1.00 / order |
 | Starting Cash | $10,000 |
 | Starting Inventory (training) | U(−500, 500) |
-| Training Episodes | 4,000 |
+| Training Episodes | 8,000 per core (10-core ensemble) |
 
 ---
 
@@ -204,9 +205,9 @@ The rigid sawtooth pattern is replaced by a **tightening oscillating wave** — 
 
 ### Prerequisites
 
-- C++17 compatible compiler (GCC ≥ 9 or Clang ≥ 10)
-- CMake ≥ 3.14
+- C++17 compatible compiler (MSVC on Windows, GCC ≥ 9 or Clang ≥ 10 on Linux/macOS)
 - Python 3.8+
+- `pybind11` (installed via pip)
 
 ### Build Instructions
 
@@ -225,33 +226,49 @@ pip install -r requirements.txt
 ```
 
 **3. Compile the C++ matching engine**
+
+The engine is built using Python's `setuptools` and Pybind11 via `python/setup.py`. Run from the `python/` directory (where `exchange.cpp` and `setup.py` are co-located):
+
 ```bash
-cd build
-cmake ..
-make -j$(nproc)
+cd python
+python setup.py build_ext --inplace
 ```
 
-The Pybind11 module (`cpp_exchange`) compiles from `src/` and is imported directly by the Python training scripts. Verify with `ls build/cpp_exchange*.so` (Linux/macOS) or `cpp_exchange*.pyd` (Windows).
+This compiles `exchange.cpp` into a native Python extension module (`cpp_exchange`). The resulting file will be named `cpp_exchange.cpXXX-*.so` (Linux/macOS) or `cpp_exchange.cpXXX-win_amd64.pyd` (Windows) and is imported directly by the training and evaluation scripts. A pre-compiled Windows binary (`cpp_exchange.cp312-win_amd64.pyd`) is included in `src/` for reference.
 
 ---
 
 ## 💻 Usage
 
-**Train the PPO-LSTM agent (asynchronous v2.0):**
+All scripts must be run from the `python/` directory (so that `cpp_exchange` and the weight files are on the path).
+
+**Train the PPO-LSTM agent (asynchronous v2.0, distributed across 10 cores):**
 ```bash
-# Ensure venv is activated and you are in the root directory
-python python/train_multicore.py
+cd python
+python train_multicore.py
 ```
+Trained weights are saved per-core as `weights_core_N.pth`. The script reports the winning core at the end.
 
 **Evaluate a trained checkpoint:**
 ```bash
-python python/test.py --checkpoint checkpoints/ppo_lstm_best.pt
+cd python
+python test.py
 ```
+Loads `deep_hedging_weights.pth` from the `python/` directory, runs a 1,000-tick asynchronous simulation, and saves the evaluation plot as `thesis_v2_asynchronous_evaluation.png`.
 
-**Run the synchronous God Mode baseline (v1.0):**
+**Train the synchronous God Mode baseline (v1.0, single-core REINFORCE):**
 ```bash
-python python/train_multicore.py --mode sync
+cd python
+python train.py
 ```
+Uses the feed-forward `RLAgent` in a zero-latency environment. Saves weights to `deep_hedging_weights.pth`.
+
+**Regenerate the GBM vs. Hawkes volatility comparison plot:**
+```bash
+cd python
+python generate_plot.py
+```
+Saves `volatility_comparison.png` to the current directory.
 
 ---
 
@@ -259,15 +276,21 @@ python python/train_multicore.py --mode sync
 
 ```
 async-deep-hedging/
-├── src/                        # C++ matching engine source
-│   └── exchange.cpp            # Hawkes LOB + 50ms latency queue (Pybind11)
-├── python/                     # Python training & evaluation
-│   ├── train_multicore.py                # Distributed PPO / PPO-LSTM training pipeline
-│   ├── test.py             # Out-of-sample evaluation & plotting
-│   ├── agent.py                # Actor-Critic LSTM architecture (PyTorch)
-│   └── environment.py          # Gym-compatible POMDP environment wrapper
-├── assets/                     # Result plots and architecture diagrams
-├── build/                      # Build output
+├── src/                              # C++ matching engine source
+│   ├── exchange.cpp                  # Hawkes LOB + 50ms latency queue (Pybind11)
+│   ├── main.cpp                      # Standalone C++ entry point (for direct testing)
+│   └── cpp_exchange.cp312-win_amd64.pyd  # Pre-compiled Windows extension (Python 3.12)
+├── python/                           # Python training & evaluation
+│   ├── setup.py                      # Pybind11 build script (compiles exchange.cpp)
+│   ├── environment.py                # Gym-compatible POMDP environment wrapper
+│   ├── agent.py                      # ActorCriticLSTM + PPOAgentLSTM (PyTorch)
+│   ├── train_multicore.py            # Distributed PPO-LSTM training (10-core ensemble)
+│   ├── train.py                      # Single-core REINFORCE baseline (v1.0 God Mode)
+│   ├── test.py                       # Asynchronous evaluation & plot generation
+│   ├── generate_plot.py              # GBM vs. Hawkes volatility comparison plot
+│   └── deep_hedging_weights.pth      # Saved weights for evaluation (loaded by test.py)
+├── assets/                           # Result plots and architecture diagrams
+├── build/                            # Build output directory
 ├── .gitignore
 └── README.md
 ```
