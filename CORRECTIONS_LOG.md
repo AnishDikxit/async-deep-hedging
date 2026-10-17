@@ -102,7 +102,7 @@ Source: math-fixer agent (opus). It read the code and the audit only. It did not
 | 3A | `d28ad0c` | as pilot 2, plus cost shaping (user decision) | Agent: shortfall −$219, penalty 5,036, J = −5,255, 38.5 fills, 68.5% outside band. ΔJ vs rule −902 (95% CI −1,200 to −644). FAIL (fills pass; J and band fail). Entropy still falling at the end (0.51). |
 | 3B | `d28ad0c` | as pilot 3A, plus entropy_coef 0.001 (user decision) | Agent: shortfall −$253, penalty 4,667, J = −4,920, 34.0 fills, 79.0% outside band. ΔJ vs rule −567 (95% CI −727 to −426). FAIL (fills pass; J and band fail). Entropy 0.04-0.10 from episode 6,400. |
 | 4A | `d28ad0c` | pilot 3A weights, 16,000 more episodes, base seed 1000 (user decision). Adam state and reward normalizer restart. | running |
-| 5 | see git log | as pilot 3A, plus penalty shaping (user decision), new weights, 8,000 episodes | running |
+| 5 | `8fa1eb2` | as pilot 3A, plus penalty shaping (user decision), new weights, 8,000 episodes | Agent: shortfall −$185, penalty 4,525, J = −4,711, 30.7 fills, 61.4% outside band. ΔJ vs rule −358 (95% CI −434 to −285). FAIL (fills pass; J and band fail). Critic explained variance fell from 0.92 to 0.68. |
 
 Pilot 1 had 2,000 gradient steps. The thesis code had 32,000. ppo_epochs is now 10 (user decision).
 
