@@ -142,6 +142,7 @@ class VectorTradingEnvironment:
     ORDER_SIZE = 10
     TICKET_FEE = 1.00
     HALF_SPREAD = 0.50
+    FILL_DELAY = 49   # steps from the order to its fill (latency of 50 engine ticks; reset uses one tick)
 
     def __init__(self, num_envs, config=None):
         self.config = config if config is not None else Config()
@@ -163,6 +164,8 @@ class VectorTradingEnvironment:
         self.num_fills = np.zeros(self.num_envs, dtype=np.int64)
         self.orders_placed = np.zeros(self.num_envs, dtype=np.int64)
         self.spread_cost = np.zeros(self.num_envs)
+        # action_log[:, k] is the action of step k. projected_penalty() needs the orders that have not filled yet.
+        self.action_log = np.zeros((self.num_envs, self.max_steps + 1), dtype=np.int64)
         self.total_penalty = np.zeros(self.num_envs)
 
         self.current_price = self.batch.reset([s & 0xFFFFFFFF for s in seeds]).astype(np.float64)
@@ -176,6 +179,7 @@ class VectorTradingEnvironment:
         self.current_step += 1
         self.in_flight_exposure += self.ORDER_SIZE * actions
         self.orders_placed += np.abs(actions)
+        self.action_log[:, self.current_step] = actions
 
         # The engine ignores the order price (audit C6). It is passed only to keep the interface.
         price, buy_fills, sell_fills, buy_qty, sell_qty, buy_value, sell_value = self.batch.step(
@@ -210,6 +214,21 @@ class VectorTradingEnvironment:
         # Half-spread and fee of the orders that are sent but not filled.
         order_cost = self.HALF_SPREAD * self.ORDER_SIZE + self.TICKET_FEE
         return order_cost * self.orders_placed - self.spread_cost
+
+    def projected_penalty(self, gamma):
+        # Discounted band penalty of the next FILL_DELAY ticks (steps c+1 .. c+49).
+        # The orders already sent fix the holdings of these ticks, because an order sent
+        # at step k fills in step k + 49. Orders sent later fill after this window.
+        c = self.current_step
+        holdings = self.holdings.astype(np.float64)
+        total = np.zeros(self.num_envs)
+        for j in range(min(self.FILL_DELAY, self.max_steps - c)):
+            k = c + j - (self.FILL_DELAY - 1)  # the order sent at step k fills in step c + 1 + j
+            if k >= 1:
+                holdings = holdings + self.ORDER_SIZE * self.action_log[:, k]
+            excess = np.maximum(0.0, np.abs(holdings) - self.config.tolerance_band)
+            total += gamma ** j * self.config.penalty_coef * excess ** 2
+        return total
 
     def legacy_mtm_pnl(self):
         return self.cash + self.holdings * self.current_price - self.starting_cash

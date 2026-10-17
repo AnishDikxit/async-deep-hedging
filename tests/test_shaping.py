@@ -11,7 +11,8 @@ from train_multicore import apply_cost_shaping, transform_reward  # noqa: E402
 
 @pytest.mark.parametrize("gamma", [0.999, 1.0])
 def test_shaping_keeps_discounted_return(gamma):
-    cfg = Config(gamma=gamma)
+    # Cost part only: its potential is 0 at the start, so the sums must be equal.
+    cfg = Config(gamma=gamma, penalty_shaping=False)
     envs = VectorTradingEnvironment(4, cfg)
     envs.reset([21, 22, 23, 24])
     rng = np.random.default_rng(1)

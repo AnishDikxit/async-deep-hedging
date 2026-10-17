@@ -29,12 +29,21 @@ def transform_reward(raw_rewards, cfg):
         return np.array([calculate_entropic_utility(r, cfg.risk_aversion_lambda) for r in raw_rewards])
     return raw_rewards / cfg.reward_scale
 
+def shaping_potential(envs, cfg):
+    # Pilot 3: the cost was charged at once, but the penalty benefit of an order came 49 ticks later.
+    # The projected penalty puts both effects of an order at the decision tick.
+    pending = envs.pending_cost()
+    if cfg.penalty_shaping:
+        pending = pending + envs.projected_penalty(cfg.gamma)
+    return -pending / cfg.reward_scale
+
 def apply_cost_shaping(utility, envs, phi_prev, done, cfg):
     # Pilot 2: the $6 cost of an order reached the reward only at the fill, 50 ticks later,
     # and was lost in the price noise. Potential-based shaping charges it at the decision tick.
-    # Phi(s) = -pending_cost / reward_scale. Phi is 0 at the start and at the end of the episode,
-    # so the discounted sum of rewards and the optimal policy do not change (Ng et al., 1999).
-    phi_next = np.zeros(len(utility)) if done else -envs.pending_cost() / cfg.reward_scale
+    # Phi(s) = shaping_potential(). Phi is 0 at the end of the episode. At the start it is 0 for the cost part
+    # and a constant of each episode for the penalty part. So the discounted sum of rewards changes only by
+    # -Phi(s_0), and the optimal policy does not change (Ng et al., 1999).
+    phi_next = np.zeros(len(utility)) if done else shaping_potential(envs, cfg)
     return utility + cfg.gamma * phi_next - phi_prev, phi_next
 
 class RunningReturnStd:
@@ -97,7 +106,9 @@ def worker_process(job):
         hidden = agent.get_initial_hidden(cfg.num_envs)
         if reward_norm is not None:
             reward_norm.reset_returns()
-        phi_prev = np.zeros(cfg.num_envs)  # no order is pending at reset
+        # No order is pending at reset. With penalty shaping, Phi(s_0) is not 0 because I0 is outside the band.
+        # Phi(s_0) depends only on I0, so it is a constant for each episode and does not bias the policy.
+        phi_prev = shaping_potential(envs, cfg) if cfg.cost_shaping else np.zeros(cfg.num_envs)
 
         buffer_states, buffer_actions, buffer_logprobs = [], [], []
         buffer_rewards, buffer_state_values = [], []
@@ -220,6 +231,7 @@ def parse_args():
     parser.add_argument("--episodes", type=int, default=None, help="episodes for each core")
     parser.add_argument("--entropy-coef", type=float, default=None)
     parser.add_argument("--no-cost-shaping", action="store_true")
+    parser.add_argument("--no-penalty-shaping", action="store_true")
     return parser.parse_args()
 
 if __name__ == '__main__':
@@ -233,6 +245,8 @@ if __name__ == '__main__':
         cfg.entropy_coef = args.entropy_coef
     if args.no_cost_shaping:
         cfg.cost_shaping = False
+    if args.no_penalty_shaping:
+        cfg.penalty_shaping = False
 
     run_dir = os.path.join("runs", args.run_name)
     os.makedirs(run_dir, exist_ok=True)
