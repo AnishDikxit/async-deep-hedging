@@ -31,7 +31,7 @@ class Config:
     num_cores: int = 10
     num_envs: int = 16               # environments that run in lockstep in each core (audit B3, B7)
     num_minibatches: int = 4         # each minibatch holds full sequences of num_envs / num_minibatches envs
-    ppo_epochs: int = 4
+    ppo_epochs: int = 10             # thesis code: 4. Raised after pilot 1: 16 envs per update gave 4x fewer gradient steps.
     clip_epsilon: float = 0.2
     gamma: float = 0.999             # thesis code: 0.99 (horizon of about 100 ticks). Audit M4.
     gae_lambda: float = 0.95

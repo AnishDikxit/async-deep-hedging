@@ -223,7 +223,7 @@ Output files:
 | Discount gamma | 0.999 | 0.99 |
 | GAE lambda | 0.95 | 0.95 |
 | Clip | 0.2 | 0.2 |
-| PPO epochs | 4 | 4 |
+| PPO epochs | 10 | 4 |
 | Entropy coefficient | 0.01 | 0.05 |
 | Value coefficient | 0.5 | 0.5 |
 | Max grad norm | 0.5 | 0.5 |

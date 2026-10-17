@@ -73,6 +73,10 @@ def worker_process(job):
             print(f"[Core {worker_id}] Could not load {weights_path}: {error}")
 
     history_pnl = []
+    # Diagnostics for each update. They show whether the policy learns to hold and whether the critic fits.
+    log_path = os.path.join(run_dir, f"train_log_core_{worker_id}.csv")
+    log_file = open(log_path, "w")
+    log_file.write("update,episode,shortfall,penalty,fills,hold_fraction,entropy,explained_variance,critic_actor_ratio\n")
     reward_norm = RunningReturnStd(cfg.num_envs, cfg.gamma) if cfg.normalize_value else None
     num_updates = cfg.total_episodes // cfg.num_envs
 
@@ -137,6 +141,10 @@ def worker_process(job):
                 advantages_tensor = torch.as_tensor(advantages, dtype=torch.float32)
 
                 returns = advantages_tensor + old_state_values
+                # Explained variance near 1 means the critic predicts the returns well. Near 0 or below means it does not.
+                returns_np = advantages + values_arr
+                explained_variance = 1.0 - np.var(returns_np - values_arr) / (np.var(returns_np) + 1e-8)
+                hold_fraction = float(np.mean(np.stack(buffer_actions) == 1))  # network index 1 = hold
                 advantages_tensor = (advantages_tensor - advantages_tensor.mean()) / (advantages_tensor.std() + 1e-8)
 
                 # Backpropagate through time
@@ -165,17 +173,26 @@ def worker_process(job):
                 episode_shortfalls = envs.implementation_shortfall().tolist()
                 history_pnl.extend(episode_shortfalls)
                 terminal_pnl = float(np.mean(episode_shortfalls))
+                mean_penalty = float(envs.total_penalty.mean())
+                mean_fills = float(envs.num_fills.mean())
+                entropy = float(dist_entropy.mean().item())
+                loss_ratio = cfg.value_coef * critic_loss.item() / (abs(actor_loss.item()) + 1e-8)
                 break
 
         episode = update * cfg.num_envs
+        log_file.write(f"{update},{episode},{terminal_pnl:.2f},{mean_penalty:.2f},{mean_fills:.1f},"
+                       f"{hold_fraction:.4f},{entropy:.4f},{explained_variance:.4f},{loss_ratio:.4f}\n")
+        log_file.flush()
         if update % max(1, 500 // cfg.num_envs) == 0:
             torch.save(agent.policy_network.state_dict(), weights_path)
         if update % max(1, 50 // cfg.num_envs) == 0:
             # Audit B2: the loss ratio shows whether the critic gradient is much larger than the actor gradient.
             print(f"[Core {worker_id}] Episode {episode:04d} | Shortfall: ${terminal_pnl:8.2f} | "
-                  f"critic/actor loss: {cfg.value_coef * critic_loss.item() / (abs(actor_loss.item()) + 1e-8):8.2f}")
+                  f"critic/actor loss: {loss_ratio:8.2f} | penalty: {mean_penalty:9.1f} | fills: {mean_fills:5.1f} | "
+                  f"hold: {hold_fraction:.2f} | entropy: {entropy:.3f} | expl. var: {explained_variance:5.2f}")
 
     torch.save(agent.policy_network.state_dict(), weights_path)
+    log_file.close()
 
     # Audit C4: select the winner on separate validation seeds, not on the training PnL.
     agent.policy_network.eval()

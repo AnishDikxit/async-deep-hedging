@@ -92,6 +92,15 @@ Source: math-fixer agent (opus). It read the code and the audit only. It did not
 | B2 | Scale rewards by a running std of the discounted return (no mean shift). | A positive scale keeps the optimal policy. Advantages are already normalized. | Yes: training dynamics. |
 | B4 | Remove the call; `next_val = 0`. | The value was multiplied by zero. The removed call used the torch RNG, so runs are not bit-identical, but the distribution is the same. | No. |
 
+## Pilot runs
+
+| Pilot | Commit | Setting | Validation result (seeds 5000-5099) |
+|---|---|---|---|
+| 1 | `1e1e406` | 1 core, 2,000 episodes, ppo_epochs 4 | Agent: shortfall −$5,291, 873 fills, 84% ticks outside band. Rule: −$107, 22 fills, 7%. Over-trading limit cycle (C5). |
+| 2 | see git log | 1 core, 8,000 episodes, ppo_epochs 10 (user decision) | running |
+
+Pilot 1 had 2,000 gradient steps. The thesis code had 32,000. ppo_epochs is now 10 (user decision).
+
 ## Process notes
 
 - `main` is named `master` in this repository. The branch was made from `origin/master`.
