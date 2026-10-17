@@ -7,7 +7,7 @@ import torch
 import torch.nn as nn
 import numpy as np
 import multiprocessing as mp
-from environment import TradingEnvironment
+from environment import VectorTradingEnvironment
 from agent import PPOAgentLSTM # Using the new LSTM Brain!
 from config import Config, TRAIN_SEED_OFFSET
 from evaluate import AgentPolicy, run_episodes, summarize
@@ -61,7 +61,8 @@ def worker_process(job):
     random.seed(seed)
     seed_rng = np.random.default_rng(seed)
 
-    envs = [TradingEnvironment(cfg) for _ in range(cfg.num_envs)]
+    # The batched environment steps all simulators in one C++ call.
+    envs = VectorTradingEnvironment(cfg.num_envs, cfg)
     agent = PPOAgentLSTM(learning_rate=cfg.learning_rate, hidden_dim=cfg.hidden_dim, use_lstm=cfg.use_lstm)
 
     weights_path = os.path.join(run_dir, f"weights_core_{worker_id}.pth")
@@ -78,7 +79,7 @@ def worker_process(job):
     for update in range(1, num_updates + 1):
         # Audit B1: record a market seed for each episode, so that each episode can be run again.
         episode_seeds = (TRAIN_SEED_OFFSET + seed_rng.integers(0, 10**9, size=cfg.num_envs)).tolist()
-        states = np.stack([env.reset(seed=s) for env, s in zip(envs, episode_seeds, strict=True)])
+        states = envs.reset(episode_seeds)
 
         # THE FIX: Wipe the LSTM's memory clean at the start of every episode
         hidden = agent.get_initial_hidden(cfg.num_envs)
@@ -92,11 +93,8 @@ def worker_process(job):
             # The AI reads the state AND its own memory
             # Audit B3, B7: num_envs environments run in lockstep and share one forward pass.
             actions, log_probs, _, state_values, hidden = agent.select_action(states, hidden)
-            results = [env.step(int(a)) for env, a in zip(envs, actions, strict=True)]
-            next_states = np.stack([r[0] for r in results])
-            rewards = np.array([r[1] for r in results])
             # All episodes have the same length, so all environments finish on the same tick.
-            done = results[0][2]
+            next_states, rewards, done = envs.step(actions)
 
             utility = transform_reward(rewards, cfg)
             if reward_norm is not None:
@@ -164,7 +162,7 @@ def worker_process(job):
                         agent.optimizer.step()
 
                 # Audit C1: report the implementation shortfall, not cash + holdings * price - starting cash.
-                episode_shortfalls = [env.implementation_shortfall() for env in envs]
+                episode_shortfalls = envs.implementation_shortfall().tolist()
                 history_pnl.extend(episode_shortfalls)
                 terminal_pnl = float(np.mean(episode_shortfalls))
                 break

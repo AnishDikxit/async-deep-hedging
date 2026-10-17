@@ -33,7 +33,7 @@ Status values: todo, in progress, fixed, blocked, deferred.
 | B4 | code | Minor | fixed | python/train_multicore.py | Terminal bootstrap call removed; `next_val = 0.0`. |
 | B5 | code | Minor | fixed | legacy/main.cpp, legacy/README.md | Moved to `legacy/`. |
 | B6 | code | Minor | fixed | src/exchange.cpp | `std::uniform_*_distribution` replaces `rand() %`. |
-| B7 | code | Minor | fixed | python/agent.py, python/train_multicore.py, python/evaluate.py | One forward pass for all environments of a core. |
+| B7 | code | Minor | fixed | python/agent.py, python/train_multicore.py, python/evaluate.py, src/exchange.cpp, python/environment.py | One forward pass for all environments of a core. `MarketBatch` steps all simulators in one C++ call: rollout 3.73 s to 0.89 s for 16 × 1,000 ticks. Results are identical (`tests/test_vector_env.py`). |
 | B8 | code | Minor | fixed | python/setup.py, legacy/train_v1.py, requirements.txt, .gitignore | Build path, pinned versions, v1 script moved. |
 | C6 | comment | Critical | fixed | python/agent.py, python/train_multicore.py, src/exchange.cpp | "3 Features" corrected to 4; market-order comment added. |
 | M5 | thesis | Major | deferred | | deferred: thesis. Hawkes is Markov; PPO has no guarantee. README has no such statement. |

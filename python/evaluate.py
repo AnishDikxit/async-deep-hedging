@@ -8,7 +8,7 @@ import argparse
 import numpy as np
 import torch
 from config import Config
-from environment import TradingEnvironment
+from environment import VectorTradingEnvironment
 from agent import PPOAgentLSTM
 
 ORDER_SIZE = 10
@@ -37,12 +37,9 @@ class RulePolicy:
         pass
 
     def act(self, envs, states):
-        actions = []
-        for env in envs:
-            position = env.holdings + env.in_flight_exposure
-            band = env.config.tolerance_band
-            actions.append(-1 if position > band else (1 if position < -band else 0))
-        return np.array(actions)
+        position = envs.holdings + envs.in_flight_exposure
+        band = envs.config.tolerance_band
+        return np.where(position > band, -1, np.where(position < -band, 1, 0))
 
 
 class TWAPPolicy:
@@ -53,14 +50,11 @@ class TWAPPolicy:
         pass
 
     def act(self, envs, states):
-        actions = []
-        for env in envs:
-            # The last fill must arrive before the end of the episode.
-            horizon = env.max_steps - env.config.latency_ticks
-            target = env.initial_holdings * max(0.0, 1.0 - env.current_step / horizon)
-            gap = env.holdings + env.in_flight_exposure - target
-            actions.append(-1 if gap >= ORDER_SIZE else (1 if gap <= -ORDER_SIZE else 0))
-        return np.array(actions)
+        # The last fill must arrive before the end of the episode.
+        horizon = envs.max_steps - envs.config.latency_ticks
+        target = envs.initial_holdings * max(0.0, 1.0 - envs.current_step / horizon)
+        gap = envs.holdings + envs.in_flight_exposure - target
+        return np.where(gap >= ORDER_SIZE, -1, np.where(gap <= -ORDER_SIZE, 1, 0))
 
 
 def run_episodes(policy, seeds, cfg, batch_size=100):
@@ -68,32 +62,31 @@ def run_episodes(policy, seeds, cfg, batch_size=100):
     rows = []
     for start in range(0, len(seeds), batch_size):
         batch_seeds = seeds[start:start + batch_size]
-        envs = [TradingEnvironment(cfg) for _ in batch_seeds]
-        states = np.stack([env.reset(seed=s) for env, s in zip(envs, batch_seeds, strict=True)])
-        policy.reset(len(envs))
-        sum_sq_inventory = np.zeros(len(envs))
-        ticks_outside = np.zeros(len(envs))
+        envs = VectorTradingEnvironment(len(batch_seeds), cfg)
+        states = envs.reset(batch_seeds)
+        policy.reset(envs.num_envs)
+        sum_sq_inventory = np.zeros(envs.num_envs)
+        ticks_outside = np.zeros(envs.num_envs)
         done = False
         while not done:
             with torch.no_grad():
                 actions = policy.act(envs, states)
-            results = [env.step(int(a)) for env, a in zip(envs, actions, strict=True)]
-            states = np.stack([r[0] for r in results])
-            done = results[0][2]
-            holdings = np.array([env.holdings for env in envs], dtype=float)
+            states, _, done = envs.step(actions)
+            holdings = envs.holdings.astype(float)
             sum_sq_inventory += holdings ** 2
             ticks_outside += np.abs(holdings) > cfg.tolerance_band
-        for i, (env, seed) in enumerate(zip(envs, batch_seeds, strict=True)):
+        shortfall, legacy = envs.implementation_shortfall(), envs.legacy_mtm_pnl()
+        for i, seed in enumerate(batch_seeds):
             rows.append({
                 "seed": int(seed),
-                "initial_holdings": env.initial_holdings,
-                "shortfall": env.implementation_shortfall(),
-                "legacy_mtm_pnl": env.legacy_mtm_pnl(),
-                "penalty": env.total_penalty,
-                "fills": env.num_fills,
-                "spread_cost": env.spread_cost,
-                "rms_inventory": float(np.sqrt(sum_sq_inventory[i] / env.max_steps)),
-                "pct_ticks_outside_band": float(100.0 * ticks_outside[i] / env.max_steps),
+                "initial_holdings": int(envs.initial_holdings[i]),
+                "shortfall": float(shortfall[i]),
+                "legacy_mtm_pnl": float(legacy[i]),
+                "penalty": float(envs.total_penalty[i]),
+                "fills": int(envs.num_fills[i]),
+                "spread_cost": float(envs.spread_cost[i]),
+                "rms_inventory": float(np.sqrt(sum_sq_inventory[i] / envs.max_steps)),
+                "pct_ticks_outside_band": float(100.0 * ticks_outside[i] / envs.max_steps),
             })
     return rows
 

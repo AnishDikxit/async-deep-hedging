@@ -5,9 +5,11 @@
 #include <ctime>
 #include <algorithm>
 #include <random>
+#include <stdexcept>
 #include <cstdint>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h> // CRITICAL: Allows returning vectors and pairs to Python
+#include <pybind11/numpy.h>
 
 namespace py = pybind11;
 
@@ -186,6 +188,73 @@ public:
     }
 };
 
+// --- BATCHED SIMULATORS ---
+// Steps N independent simulators in one call. A Python loop over N environments
+// cost about 70% of each training update, so the loop runs here instead.
+// Each simulator gives the same path as a MarketSimulator with the same seed.
+class MarketBatch {
+private:
+    std::vector<MarketSimulator> sims;
+
+public:
+    MarketBatch(int num_envs, double alpha_jump) {
+        sims.reserve(num_envs);
+        for (int i = 0; i < num_envs; i++) sims.emplace_back(0, alpha_jump);
+    }
+
+    int size() const { return static_cast<int>(sims.size()); }
+
+    // Restarts each simulator with its seed and advances one tick, as TradingEnvironment.reset() does.
+    py::array_t<int> reset(const std::vector<std::int64_t>& seeds) {
+        if (seeds.size() != sims.size()) throw std::invalid_argument("one seed is needed for each simulator");
+        py::array_t<int> prices(sims.size());
+        auto p = prices.mutable_unchecked<1>();
+        for (size_t i = 0; i < sims.size(); i++) {
+            sims[i].reset(seeds[i]);
+            p(i) = sims[i].step().first;
+        }
+        return prices;
+    }
+
+    // actions[i] is -1 (sell), 0 (hold) or +1 (buy). The order is placed before the tick, as in TradingEnvironment.step().
+    // Returns (price, buy_fills, sell_fills, buy_qty, sell_qty, buy_value, sell_value).
+    // buy_value and sell_value are the sums of execution_price * quantity.
+    py::tuple step(py::array_t<int, py::array::c_style | py::array::forcecast> actions,
+                   py::array_t<int, py::array::c_style | py::array::forcecast> order_prices) {
+        const size_t n = sims.size();
+        if (static_cast<size_t>(actions.size()) != n || static_cast<size_t>(order_prices.size()) != n)
+            throw std::invalid_argument("one action and one order price are needed for each simulator");
+        auto a = actions.unchecked<1>();
+        auto op = order_prices.unchecked<1>();
+
+        py::array_t<int> price(n), buy_fills(n), sell_fills(n), buy_qty(n), sell_qty(n);
+        py::array_t<double> buy_value(n), sell_value(n);
+        auto pr = price.mutable_unchecked<1>();
+        auto bf = buy_fills.mutable_unchecked<1>();
+        auto sf = sell_fills.mutable_unchecked<1>();
+        auto bq = buy_qty.mutable_unchecked<1>();
+        auto sq = sell_qty.mutable_unchecked<1>();
+        auto bv = buy_value.mutable_unchecked<1>();
+        auto sv = sell_value.mutable_unchecked<1>();
+
+        for (size_t i = 0; i < n; i++) {
+            if (a(i) == 1) sims[i].place_order(op(i), true);
+            else if (a(i) == -1) sims[i].place_order(op(i), false);
+
+            auto result = sims[i].step();
+            pr(i) = result.first;
+            bf(i) = sf(i) = bq(i) = sq(i) = 0;
+            bv(i) = sv(i) = 0.0;
+            for (const FillReport& fill : result.second) {
+                double value = static_cast<double>(fill.execution_price) * fill.quantity;
+                if (fill.is_buy) { bf(i)++; bq(i) += fill.quantity; bv(i) += value; }
+                else             { sf(i)++; sq(i) += fill.quantity; sv(i) += value; }
+            }
+        }
+        return py::make_tuple(price, buy_fills, sell_fills, buy_qty, sell_qty, buy_value, sell_value);
+    }
+};
+
 // --- PYBIND11 MODULE BINDINGS ---
 PYBIND11_MODULE(cpp_exchange, m) {
     m.doc() = "Asynchronous C++ Market Simulator for PyTorch";
@@ -204,4 +273,10 @@ PYBIND11_MODULE(cpp_exchange, m) {
         .def("step", &MarketSimulator::step)
         .def("get_event_count", &MarketSimulator::get_event_count)
         .def("get_branching_ratio", &MarketSimulator::get_branching_ratio);
+
+    py::class_<MarketBatch>(m, "MarketBatch")
+        .def(py::init<int, double>(), py::arg("num_envs"), py::arg("alpha_jump") = 0.012)
+        .def("size", &MarketBatch::size)
+        .def("reset", &MarketBatch::reset, py::arg("seeds"))
+        .def("step", &MarketBatch::step, py::arg("actions"), py::arg("order_prices"));
 }
