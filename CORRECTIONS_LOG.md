@@ -103,10 +103,13 @@ Source: math-fixer agent (opus). It read the code and the audit only. It did not
 | 3B | `d28ad0c` | as pilot 3A, plus entropy_coef 0.001 (user decision) | Agent: shortfall −$253, penalty 4,667, J = −4,920, 34.0 fills, 79.0% outside band. ΔJ vs rule −567 (95% CI −727 to −426). FAIL (fills pass; J and band fail). Entropy 0.04-0.10 from episode 6,400. |
 | 4A | `d28ad0c` | pilot 3A weights, 16,000 more episodes (24,000 in total), base seed 1000 (user decision). Adam state and reward normalizer restart. | Agent: shortfall −$162, penalty 4,281, J = −4,442, 33.5 fills, 13.0% outside band, RMS inventory 74.0. ΔJ vs rule −90 (95% CI −146 to −33). **PASS** (all three criteria). Not better than the rule (CI below 0). Explained variance 0.98-0.99. |
 | 5 | `8fa1eb2` | as pilot 3A, plus penalty shaping (user decision), new weights, 8,000 episodes | Agent: shortfall −$185, penalty 4,525, J = −4,711, 30.7 fills, 61.4% outside band. ΔJ vs rule −358 (95% CI −434 to −285). FAIL (fills pass; J and band fail). Critic explained variance fell from 0.92 to 0.68. |
+| 5L | `8fa1eb2` | pilot 5 weights, 16,000 more episodes (24,000 in total), base seed 1000 (user decision). Same method as 4A. | Agent: shortfall −$164, penalty 4,609, J = −4,772, 28.6 fills, 50.8% outside band, RMS inventory 81.8. ΔJ vs rule −420 (95% CI −594 to −271). FAIL (fills pass; J and band fail). Worse than pilot 5 at 8,000 episodes. Entropy 0.02-0.09 (4A: 0.10-0.20). Explained variance 0.66-0.88 (4A: 0.97-0.99). |
 
 Pilot 1 had 2,000 gradient steps. The thesis code had 32,000. ppo_epochs is now 10 (user decision).
 
 total_episodes is now 24,000 for each core (user decision). The only passing pilot (4A) used 24,000 episodes. At 8,000 episodes, no setting passed.
+
+Pilot 5L compares the two shaping options at 24,000 episodes. Cost shaping only (4A) passes. Cost and penalty shaping (5L) fails, and it did not improve after episode 8,000. With penalty shaping, the policy entropy fell below 0.1 and the critic explained variance stayed below 0.9. The policy then had almost no exploration to correct its band errors.
 
 ### Pilot 2 diagnosis (math-fixer, opus)
 
