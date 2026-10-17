@@ -37,6 +37,8 @@ struct CompareOrder {
 
 class MarketSimulator {
 private:
+    // Audit M1: the book holds only random orders. It does not change the price or the agent fills.
+    // The model thus has no market impact, no liquidity limit and no variable spread.
     std::vector<Order> bids; 
     std::vector<Order> asks;
     std::priority_queue<Order, std::vector<Order>, CompareOrder> latency_queue;
@@ -163,6 +165,7 @@ public:
             latency_queue.pop();
             
             // If it is the AI's order (not a dummy order), it executes at the CURRENT mutated price
+            // Audit C6: the order price is ignored. Agent orders are market orders with a full fill.
             if (ready_order.id != 999999) {
                 FillReport report;
                 report.order_id = ready_order.id;
@@ -171,6 +174,7 @@ public:
                 report.is_buy = ready_order.is_buy;
                 executed_fills.push_back(report);
             } else {
+                // Audit M1: this branch never runs. Random orders go to the book directly, not to the queue.
                 add_order(ready_order); 
             }
         }
