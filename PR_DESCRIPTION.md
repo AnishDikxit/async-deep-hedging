@@ -1,6 +1,6 @@
 # Audit corrections for the v2 system (draft)
 
-Source: `docs/AUDIT_REPORT_v2.md`. Full status: `CORRECTIONS_LOG.md`. Verification: `AUDIT_STATE.md`.
+Status: `CORRECTIONS_LOG.md`. Verification: `AUDIT_STATE.md`.
 
 ## What changed
 
@@ -11,29 +11,29 @@ Source: `docs/AUDIT_REPORT_v2.md`. Full status: `CORRECTIONS_LOG.md`. Verificati
 - C5: `test.py` reports fills, spread cost and penalty.
 - C6: Added `config.py`. The code now uses the README values.
 - M1: Comments document the order book limits.
-- M2, M6: The README states that the model has no option and that the cores are independent.
+- M2, M6: The README states the limits of the model and the cores.
 - M3: The reward is linear.
 - M4: γ is 0.999.
-- B1, B6: The C++ engine uses a seeded `std::mt19937`. Each core has its own seeds.
+- B1, B6: Seeded `std::mt19937`. Each core has its own seeds.
 - B2: Rewards are scaled by a running standard deviation.
 - B3, B7: Each core runs 16 environments in one batch.
 - B4: Removed the unused terminal value.
-- B5, B8: Old files are in `legacy/`. `setup.py` builds `src/exchange.cpp`. Added `requirements.txt`.
+- B5, B8: Old files are in `legacy/`. The build works. Added `requirements.txt`.
 
 ## Why
 
 - C1: The reported PnL contained the value of the initial shares.
 - C2: The branching ratio was 7.35, so the process was unstable.
 - C3: No experiment separated E_t from the LSTM.
-- C4: One episode with no baseline cannot support a general claim.
-- C5: The figure showed many trades, but the trades were not counted.
+- C4: One episode cannot support a general claim.
+- C5: The trades were not counted.
 - C6: The README and the code gave different values.
 - M1, M2, M6: The README described features that the code does not have.
 - M3: The step utility was almost linear, so it gave no risk aversion.
 - M4: γ = 0.99 ignored most of the 1,000-tick episode.
 - B1, B6: All workers could start with the same seeds.
 - B2: The critic loss controlled the gradient.
-- B3, B7: One episode for each update gave high variance and slow training.
+- B3, B7: Training had high variance and was slow.
 - B4, B5, B8: Unused code. A new user could not build the project.
 
 ## Deferred
@@ -53,13 +53,8 @@ The old checkpoints do not load into the new network.
 
 ## How to check
 
-1. `pip install -r requirements.txt`
-2. `cd python`
-3. `python setup.py build_ext --inplace`
-4. `cd ..`
-5. `python -m pytest`. The expected result is `9 passed`.
-6. `cd python`
-7. `python evaluate.py --policies rule twap --num-seeds 20`
+1. Do the Setup steps in `README.md`. Step 9 must give `9 passed`.
+2. In `python/`, run `python evaluate.py --policies rule twap --num-seeds 20`.
 
 ## Diagrams
 
