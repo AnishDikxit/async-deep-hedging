@@ -99,6 +99,9 @@ Source: math-fixer agent (opus). It read the code and the audit only. It did not
 | 1 | `1e1e406` | 1 core, 2,000 episodes, ppo_epochs 4 | Agent: shortfall −$5,291, 873 fills, 84% ticks outside band. Rule: −$107, 22 fills, 7%. Over-trading limit cycle (C5). |
 | 2 | `cf1b9dd` | 1 core, 8,000 episodes, ppo_epochs 10 (user decision) | Agent: shortfall −$3,603, penalty 5,062, 596 fills, 59% outside band; J = shortfall − penalty = −8,665. Rule: J = −4,353. Critic explained variance 0.93-0.97. Entropy 0.94-1.03 (max 1.099). Hold fraction 0.29 to 0.40-0.50. |
 
+| 3A | see git log | as pilot 2, plus cost shaping (user decision) | running |
+| 3B | see git log | as pilot 3A, plus entropy_coef 0.001 (user decision) | running |
+
 Pilot 1 had 2,000 gradient steps. The thesis code had 32,000. ppo_epochs is now 10 (user decision).
 
 ### Pilot 2 diagnosis (math-fixer, opus)

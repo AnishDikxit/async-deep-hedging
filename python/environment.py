@@ -35,6 +35,7 @@ class TradingEnvironment:
 
         # Audit C5: counters for the evaluation report.
         self.num_fills = 0
+        self.orders_placed = 0
         self.spread_cost = 0.0       # half-spread and ticket fees paid
         self.total_penalty = 0.0     # sum of the tolerance-band penalty (reward only, not cash)
 
@@ -54,6 +55,8 @@ class TradingEnvironment:
         ticket_fee = 1.00
 
         # --- 1. SEND ORDER TO C++ ENGINE (NO INSTANT GRATIFICATION) ---
+        if action != 0:
+            self.orders_placed += 1
         # Audit C6: the engine ignores the price argument. All agent orders are market orders.
         if action == 1:
             self.engine.place_order(int(self.current_price), True)
@@ -108,6 +111,10 @@ class TradingEnvironment:
         # Audit C1: final MTM minus initial MTM. It does not include the value of the initial inventory.
         return self.cash + self.holdings * self.current_price - self.initial_mtm
 
+    def pending_cost(self):
+        # Half-spread and fee of the orders that are sent but not filled. Each order costs 0.50 * 10 + 1 = $6.
+        return 6.0 * self.orders_placed - self.spread_cost
+
     def legacy_mtm_pnl(self):
         # The thesis value: cash + holdings * price - starting cash. It includes the initial inventory value.
         return self.cash + self.holdings * self.current_price - self.starting_cash
@@ -154,6 +161,7 @@ class VectorTradingEnvironment:
         self.in_flight_exposure = np.zeros(self.num_envs, dtype=np.int64)
         self.cash = np.full(self.num_envs, self.starting_cash)
         self.num_fills = np.zeros(self.num_envs, dtype=np.int64)
+        self.orders_placed = np.zeros(self.num_envs, dtype=np.int64)
         self.spread_cost = np.zeros(self.num_envs)
         self.total_penalty = np.zeros(self.num_envs)
 
@@ -167,6 +175,7 @@ class VectorTradingEnvironment:
         actions = np.asarray(actions, dtype=np.int32)
         self.current_step += 1
         self.in_flight_exposure += self.ORDER_SIZE * actions
+        self.orders_placed += np.abs(actions)
 
         # The engine ignores the order price (audit C6). It is passed only to keep the interface.
         price, buy_fills, sell_fills, buy_qty, sell_qty, buy_value, sell_value = self.batch.step(
@@ -196,6 +205,11 @@ class VectorTradingEnvironment:
 
     def implementation_shortfall(self):
         return self.cash + self.holdings * self.current_price - self.initial_mtm
+
+    def pending_cost(self):
+        # Half-spread and fee of the orders that are sent but not filled.
+        order_cost = self.HALF_SPREAD * self.ORDER_SIZE + self.TICKET_FEE
+        return order_cost * self.orders_placed - self.spread_cost
 
     def legacy_mtm_pnl(self):
         return self.cash + self.holdings * self.current_price - self.starting_cash
