@@ -97,9 +97,19 @@ Source: math-fixer agent (opus). It read the code and the audit only. It did not
 | Pilot | Commit | Setting | Validation result (seeds 5000-5099) |
 |---|---|---|---|
 | 1 | `1e1e406` | 1 core, 2,000 episodes, ppo_epochs 4 | Agent: shortfall −$5,291, 873 fills, 84% ticks outside band. Rule: −$107, 22 fills, 7%. Over-trading limit cycle (C5). |
-| 2 | see git log | 1 core, 8,000 episodes, ppo_epochs 10 (user decision) | running |
+| 2 | `cf1b9dd` | 1 core, 8,000 episodes, ppo_epochs 10 (user decision) | Agent: shortfall −$3,603, penalty 5,062, 596 fills, 59% outside band; J = shortfall − penalty = −8,665. Rule: J = −4,353. Critic explained variance 0.93-0.97. Entropy 0.94-1.03 (max 1.099). Hold fraction 0.29 to 0.40-0.50. |
 
 Pilot 1 had 2,000 gradient steps. The thesis code had 32,000. ppo_epochs is now 10 (user decision).
+
+### Pilot 2 diagnosis (math-fixer, opus)
+
+- Main cause: the `holdings × Δprice` term adds price noise to each step reward. One order's cost ($6) is small compared with this noise.
+- The cost reaches the reward at the fill, 50 ticks after the decision. Through GAE (λ = 0.95, γ = 0.999) it has weight 0.073.
+- Entropy stays near the maximum, so the greedy policy chooses from almost equal logits.
+- Rejected: GAE λ = 1.0. It adds up to 1,000 ticks of price noise to each advantage.
+- Proposed (pilot 3): potential-based shaping with Φ(s) = −pending_cost / reward_scale. pending_cost = $6 × (orders placed) − spread and fees paid. Φ(s_0) = Φ(s_T) = 0, so the optimal policy and the objective do not change (Ng et al., 1999).
+- Second option if entropy stays above 0.9: entropy_coef 0.001.
+- Pass criterion: paired bootstrap 95% CI lower bound of J(agent) − J(rule) above −218, mean fills ≤ 66, and ticks outside the band ≤ rule + 10 points.
 
 ## Process notes
 
