@@ -9,34 +9,34 @@ Status values: todo, in progress, fixed, blocked, deferred.
 
 | ID | area | severity | status | files changed | note |
 |---|---|---|---|---|---|
-| B8 | README | Minor | todo | | Wrong clone URL, missing `requirements.txt`, missing `.pyd`, v1 run steps. |
-| C1 | README | Critical | todo | | README PnL includes the initial inventory value. |
-| C3 | README | Critical | todo | | README gives the improvement to the LSTM with no ablation. |
-| C4 | README | Critical | todo | | README results use one episode and no baseline. |
-| C5 | README | Critical | todo | | README text does not agree with Fig. 4.3. |
-| C6 | README | Critical | todo | | README hyperparameters do not agree with the code. |
-| M1 | README | Major | todo | | README describes liquidity effects that the code does not have. |
-| M2 | README | Major | todo | | README says "delta-neutral", but the model has no option. |
-| M6 | README | Major | todo | | README says "distributed rollout"; the cores are independent runs. |
-| C1 | code | Critical | todo | | Initial inventory not in portfolio value; penalty taken from cash. |
-| C2 | code | Critical | todo | | Hawkes branching ratio 7.5; probability not limited to 1. |
-| C3 | code | Critical | todo | | No feed-forward agent for an ablation. |
-| C4 | code | Critical | todo | | One test episode, no baseline, winner file not saved. |
-| C5 | code | Critical | todo | | `test.py` does not count trades or spread cost. |
-| C6 | config | Critical | todo | | Hyperparameters are spread over scripts; no config file. |
-| M1 | code | Major | todo | | Order book has no effect on agent fills. |
-| M3 | code | Major | todo | | Entropic utility applied to each step. |
-| M4 | config | Major | todo | | γ = 0.99 is too low for a 1,000-tick horizon. |
-| B1 | code | Major | todo | | No seeds in workers; `srand(time(0))` in C++. |
-| B2 | code | Major | todo | | Critic loss is much larger than actor loss. |
-| B3 | code | Minor | todo | | One episode for each PPO update. |
-| B4 | code | Minor | todo | | Terminal bootstrap value calculated but not used. |
-| B5 | code | Minor | todo | | `main.cpp` is not used and has defects. |
-| B6 | code | Minor | todo | | `rand() % 1000` modulo bias. |
-| B7 | code | Minor | todo | | Network runs on one state at a time. |
-| B8 | code | Minor | todo | | `setup.py` path, `train.py` cannot run. |
-| C6 | comment | Critical | todo | | Comments say "3 Features"; the state has 4. |
-| M5 | thesis | Major | deferred | | deferred: thesis. Hawkes is Markov; PPO has no guarantee. |
+| B8 | README | Minor | fixed | README.md | Real clone URL, `requirements.txt`, no `.pyd`, v1 marked historical, tests step. |
+| C1 | README | Critical | fixed | README.md | User decision: show both. ~$19,000 labelled as MTM incl. initial inventory; ≈ −$6,400 labelled as audit estimate. |
+| C3 | README | Critical | fixed | README.md | User decision: audit wording. "MDP with delayed actions"; no ablation; hidden quantities named. |
+| C4 | README | Critical | fixed | README.md | One episode, no baseline stated; new metrics marked "pending a local run". |
+| C5 | README | Critical | fixed | README.md | User decision: audit wording. "Decaying limit cycle in one episode". |
+| C6 | README | Critical | fixed | README.md | Three-column table: config.py default and thesis-code value. |
+| M1 | README | Major | fixed | README.md | Simulator rules and Known limits state no impact, no liquidity limit. |
+| M2 | README | Major | fixed | README.md | "Model contains no option" in section 1 and Known limits. Title kept (thesis title). |
+| M6 | README | Major | fixed | README.md | Cores are independent runs; "asynchronous" refers to execution. |
+| C1 | code | Critical | fixed | python/environment.py, python/test.py, python/train_multicore.py, tests/test_environment.py | Portfolio value includes inventory; penalty in reward only; shortfall reported. |
+| C2 | code | Critical | fixed | src/exchange.cpp, python/generate_plot.py, tests/test_exchange.py | User decision: corrected default alpha_jump = 0.012; probability limited to 1; rate test. |
+| C3 | code | Critical | blocked | python/agent.py, python/environment.py, python/config.py, python/train_multicore.py | Ablation code added (`--arch mlp`, `--no-in-flight`). blocked: local run (20 training runs). |
+| C4 | code | Critical | blocked | python/evaluate.py, python/train_multicore.py, python/test.py | 1,000 test seeds, rule and TWAP baselines, validation winner. Agent metrics blocked: local run. |
+| C5 | code | Critical | fixed | python/environment.py, python/test.py | Fills, spread cost and penalty reported. |
+| C6 | config | Critical | fixed | python/config.py, python/agent.py, python/environment.py, python/train_multicore.py | User decision: README correct. Entropy 0.01, T = 64, MLP encoder, uniform I0. LayerNorm (thesis only) not added. |
+| M1 | code | Major | deferred | src/exchange.cpp (comments only) | Book-based fills are a model change. Needs a user decision and a retrain. Comments document the limit. |
+| M3 | code | Major | fixed | python/train_multicore.py, python/config.py | User decision: corrected default. Linear reward; `entropic_step` still selectable. |
+| M4 | config | Major | fixed | python/config.py | User decision: γ = 0.999. math-fixer recommends 1.0 (open option, see Math decisions). |
+| B1 | code | Major | fixed | src/exchange.cpp, python/environment.py, python/train_multicore.py | mt19937 with seed; torch, numpy, random seeds per core; seed per episode. |
+| B2 | code | Major | fixed | python/train_multicore.py, python/config.py | Reward scale by running std of return; critic/actor loss ratio in log. |
+| B3 | code | Minor | fixed | python/train_multicore.py, python/config.py | 16 environments per update; 4 minibatches of full sequences. |
+| B4 | code | Minor | fixed | python/train_multicore.py | Terminal bootstrap call removed; `next_val = 0.0`. |
+| B5 | code | Minor | fixed | legacy/main.cpp, legacy/README.md | Moved to `legacy/`. |
+| B6 | code | Minor | fixed | src/exchange.cpp | `std::uniform_*_distribution` replaces `rand() %`. |
+| B7 | code | Minor | fixed | python/agent.py, python/train_multicore.py, python/evaluate.py | One forward pass for all environments of a core. |
+| B8 | code | Minor | fixed | python/setup.py, legacy/train_v1.py, requirements.txt, .gitignore | Build path, pinned versions, v1 script moved. |
+| C6 | comment | Critical | fixed | python/agent.py, python/train_multicore.py, src/exchange.cpp | "3 Features" corrected to 4; market-order comment added. |
+| M5 | thesis | Major | deferred | | deferred: thesis. Hawkes is Markov; PPO has no guarantee. README has no such statement. |
 
 ## Deferred: thesis
 
@@ -57,8 +57,45 @@ The thesis PDF is out of scope for this pass. These thesis parts are deferred.
 
 ## Blocked: local run
 
-Items that need a checkpoint or a training run are listed here.
+These items need the local checkpoints or new training runs. Run all commands from `python/` after the Setup steps in README.md.
+
+| ID | Command | Inputs | Expected output |
+|---|---|---|---|
+| C1, C2, C6, M3, M4, B2 | `python train_multicore.py --run-name main` | none (new weights; old checkpoints do not load) | `runs/main/config.json`, `runs/main/weights_core_0..9.pth`, `runs/main/winner.json`, `deep_hedging_weights.pth`, `deep_hedging_config.json`. Log lines show `critic/actor loss` near 1, not much greater. |
+| C4 | `python evaluate.py --policies agent rule twap --out results/main` | `deep_hedging_weights.pth`, `deep_hedging_config.json` | `results/main/eval_summary.json`: mean, std, CVaR 5% shortfall, RMS inventory, % ticks outside band, fills for each policy. |
+| C3 | see loop below | none | 20 folders `runs/<arch>_<feat>_s<k>` and `results/<arch>_<feat>_s<k>/eval_summary.json`. |
+| C5 | `python test.py` | `deep_hedging_weights.pth` | Shortfall, legacy MTM PnL, orders, fills, spread cost, penalty; new `thesis_v2_asynchronous_evaluation.png`. |
+| C1 (legacy figure) | not possible as is | thesis checkpoint | The thesis code had no seed control (`srand(time(0))`), so the Fig. 4.3 episode cannot be run again. The −$6,400 value stays an audit estimate. |
+
+C3 ablation loop (bash):
+
+```bash
+for arch in lstm mlp; do for feat in inflight noinflight; do for k in 0 1 2 3 4; do
+  name=${arch}_${feat}_s${k}; flag=""; [ "$feat" = noinflight ] && flag="--no-in-flight"
+  python train_multicore.py --run-name $name --arch $arch $flag --base-seed $((k*100))
+  python evaluate.py --policies agent rule twap --out results/$name
+done; done; done
+```
+
+`--base-seed $((k*100))` keeps the core seeds of different runs apart (core j uses base seed + j).
 
 ## Math decisions
 
-Decisions from the math-fixer agent are listed here.
+Source: math-fixer agent (opus). It read the code and the audit only. It did not edit files or run code.
+
+| ID | Decision | Reason | Changes a result |
+|---|---|---|---|
+| C1 | Previous value = cash + holdings × price at reset; penalty in reward only; report final MTM − initial MTM. Reporting fix has no flag. | The initial inventory is given, so its value is not a reward. The penalty is shaping, not cash. | Yes: all PnL values, Fig. 4.3 panel 3, winner choice. |
+| C2 | alpha_jump = 0.012; λ = min(λ, 1). | The code decays first, then adds α. So n = αd/(1−d): 7.35 for 0.15, 0.588 for 0.012. Stable rate μ/(1−n) = 0.0485. The audit's 7.5 and 0.6 use α/(1−d). | Yes: all dynamics. The cap alone changes nothing. |
+| M3 | Linear reward r/1000; keep `entropic_step` as an option. | A sum of step utilities is not the entropic risk of terminal PnL. At normal step sizes the function is almost linear. | Yes, small. |
+| M4 | Recommended γ = 1.0; γ = 0.999 used (user approved 0.999). | Finite horizon and time in the state, so the undiscounted sum is the true objective. 0.999 still weights the last tick by 0.37. | Yes. Open option for the user. |
+| B2 | Scale rewards by a running std of the discounted return (no mean shift). | A positive scale keeps the optimal policy. Advantages are already normalized. | Yes: training dynamics. |
+| B4 | Remove the call; `next_val = 0`. | The value was multiplied by zero. The removed call used the torch RNG, so runs are not bit-identical, but the distribution is the same. | No. |
+
+## Process notes
+
+- `main` is named `master` in this repository. The branch was made from `origin/master`.
+- New agent files in `.claude/agents/` do not load in a running session. The agents ran as general-purpose agents with the same instructions and the model from the frontmatter.
+- The main session applied the code fixes directly, not through code-fixer, to keep one commit for each finding group.
+- `download.pytorch.org` is blocked by the cloud network policy. torch came from PyPI.
+- Smoke tests (each under 60 s): build, 9 pytest tests, baselines on 20 seeds, 1 core × 48 episodes training, `test.py`, `generate_plot.py`. Smoke numbers are not results.
