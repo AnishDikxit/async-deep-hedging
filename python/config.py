@@ -27,7 +27,7 @@ class Config:
     learning_rate: float = 1e-4
 
     # --- PPO (train_multicore.py) ---
-    total_episodes: int = 8000       # episodes for each core
+    total_episodes: int = 24000      # episodes for each core. thesis code: 8,000. Raised after pilot 4A (user decision).
     num_cores: int = 10
     num_envs: int = 16               # environments that run in lockstep in each core (audit B3, B7)
     num_minibatches: int = 4         # each minibatch holds full sequences of num_envs / num_minibatches envs

@@ -106,6 +106,8 @@ Source: math-fixer agent (opus). It read the code and the audit only. It did not
 
 Pilot 1 had 2,000 gradient steps. The thesis code had 32,000. ppo_epochs is now 10 (user decision).
 
+total_episodes is now 24,000 for each core (user decision). The only passing pilot (4A) used 24,000 episodes. At 8,000 episodes, no setting passed.
+
 ### Pilot 2 diagnosis (math-fixer, opus)
 
 - Main cause: the `holdings × Δprice` term adds price noise to each step reward. One order's cost ($6) is small compared with this noise.

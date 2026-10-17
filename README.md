@@ -234,7 +234,7 @@ Output files:
 | Penalty shaping | on: the band penalty of pending orders is charged at the decision tick (potential-based) | none |
 | Environments per core | 16 (4 minibatches) | 1 |
 | Network | MLP encoder, LSTM 64, actor and critic heads | LSTM 64, heads (no encoder) |
-| Episodes per core | 8,000 | 8,000 |
+| Episodes per core | 24,000 | 8,000 |
 | Cores | 10 | 10 |
 | Latency | 50 ticks | 50 ticks |
 | Band and penalty | ±30, 0.001 × excess² (reward only) | same coefficient, but taken from cash |
@@ -301,7 +301,7 @@ flowchart TD
     A["Reset 16 environments with seeds"] --> B["Collect 1,000 ticks"]
     B --> C[GAE]
     C --> D["PPO epochs with truncated BPTT"]
-    D --> E{"8,000 episodes done?"}
+    D --> E{"24,000 episodes done?"}
     E -- no --> A
     E -- yes --> F["Evaluate on validation seeds"]
     F --> G["Copy the winner"]
