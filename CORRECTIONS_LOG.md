@@ -111,6 +111,10 @@ total_episodes is now 24,000 for each core (user decision). The only passing pil
 
 Pilot 5L compares the two shaping options at 24,000 episodes. Cost shaping only (4A) passes. Cost and penalty shaping (5L) fails, and it did not improve after episode 8,000. With penalty shaping, the policy entropy fell below 0.1 and the critic explained variance stayed below 0.9. The policy then had almost no exploration to correct its band errors.
 
+penalty_shaping is now off by default (user decision). The code stays as an option (`--penalty-shaping`). The main run uses the pilot 4A method: cost shaping only.
+
+A background job in the cloud stops after 2 hours. One core needs about 85 minutes for 24,000 episodes. `--core-ids` trains a part of the cores, and each core saves `result_core_<k>.json`. `--select-winner` chooses the winner when all cores have a result.
+
 ### Pilot 2 diagnosis (math-fixer, opus)
 
 - Main cause: the `holdings × Δprice` term adds price noise to each step reward. One order's cost ($6) is small compared with this noise.

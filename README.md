@@ -74,7 +74,7 @@ Run all commands from the `python/` folder.
 python train_multicore.py --run-name main
 ```
 
-Options: `--arch lstm|mlp`, `--no-in-flight`, `--base-seed N`, `--cores N`, `--episodes N`, `--entropy-coef X`, `--no-cost-shaping`, `--no-penalty-shaping`.
+Options: `--arch lstm|mlp`, `--no-in-flight`, `--base-seed N`, `--cores N`, `--episodes N`, `--entropy-coef X`, `--no-cost-shaping`, `--penalty-shaping`, `--core-ids K ...`, `--select-winner`.
 Expected output:
 
 ```
@@ -231,7 +231,7 @@ Output files:
 | Reward | linear (reward / 1000) | entropic utility on each step (lambda 0.05) |
 | Value scaling | running std | none |
 | Cost shaping | on: the $6 order cost is charged at the decision tick (potential-based) | none |
-| Penalty shaping | on: the band penalty of pending orders is charged at the decision tick (potential-based) | none |
+| Penalty shaping | off (option: the band penalty of pending orders is charged at the decision tick) | none |
 | Environments per core | 16 (4 minibatches) | 1 |
 | Network | MLP encoder, LSTM 64, actor and critic heads | LSTM 64, heads (no encoder) |
 | Episodes per core | 24,000 | 8,000 |

@@ -29,7 +29,7 @@ def shaped_episode(cfg, seeds, actions):
 
 @pytest.mark.parametrize("gamma", [0.999, 1.0])
 def test_telescoping(gamma):
-    cfg = Config(gamma=gamma, max_steps=T)
+    cfg = Config(gamma=gamma, max_steps=T, penalty_shaping=True)
     actions = np.random.default_rng(3).integers(-1, 2, size=(N, T))
     raw, shaped, phi0 = shaped_episode(cfg, [31, 32, 33, 34], actions)
     np.testing.assert_allclose(shaped, raw - phi0, rtol=0, atol=1e-9)
@@ -37,7 +37,7 @@ def test_telescoping(gamma):
 
 def test_closed_form_penalty_part():
     # After the terms cancel, step t pays -gamma^49 * penalty(holdings + in_flight at s_{t+1}).
-    cfg = Config(gamma=0.999, max_steps=T)
+    cfg = Config(gamma=0.999, max_steps=T, penalty_shaping=True)
     envs = VectorTradingEnvironment(N, cfg)
     envs.reset([41, 42, 43, 44])
     rng = np.random.default_rng(4)
@@ -58,7 +58,7 @@ def test_closed_form_penalty_part():
 
 def test_policy_invariance():
     # Two action sequences on the same seeds: the return difference must not change.
-    cfg = Config(gamma=0.999, max_steps=T)
+    cfg = Config(gamma=0.999, max_steps=T, penalty_shaping=True)
     rng = np.random.default_rng(5)
     a1, a2 = rng.integers(-1, 2, size=(N, T)), rng.integers(-1, 2, size=(N, T))
     seeds = [51, 52, 53, 54]

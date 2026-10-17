@@ -10,7 +10,7 @@ import multiprocessing as mp
 from environment import VectorTradingEnvironment
 from agent import PPOAgentLSTM # Using the new LSTM Brain!
 from config import Config, TRAIN_SEED_OFFSET
-from evaluate import AgentPolicy, run_episodes, summarize
+from evaluate import AgentPolicy, run_episodes, summarize, load_config
 
 # --- HYPERPARAMETERS ---
 # Audit C6: all hyperparameters are in config.py.
@@ -219,7 +219,47 @@ def worker_process(job):
     # Audit C4: select the winner on separate validation seeds, not on the training PnL.
     agent.policy_network.eval()
     validation = summarize(run_episodes(AgentPolicy(agent), cfg.validation_seeds, cfg))
-    return worker_id, seed, float(np.mean(history_pnl[-100:])), validation
+    result = {"core": worker_id, "seed": seed, "train_shortfall_last100": float(np.mean(history_pnl[-100:])),
+              "validation": validation}
+    # A run in parts (--core-ids) chooses the winner from these files.
+    with open(os.path.join(run_dir, f"result_core_{worker_id}.json"), "w") as f:
+        json.dump(result, f, indent=2)
+    return result
+
+def select_winner(run_dir, cfg):
+    results = []
+    for worker_id in range(cfg.num_cores):
+        path = os.path.join(run_dir, f"result_core_{worker_id}.json")
+        if os.path.exists(path):
+            with open(path) as f:
+                results.append(json.load(f))
+    missing = sorted(set(range(cfg.num_cores)) - {r["core"] for r in results})
+    if missing:
+        print(f"Cores {missing} have no result yet. Train them with --core-ids, then run --select-winner.")
+        return
+
+    print("\n--- All Cores Finished PPO Training ---")
+    best = None
+    for r in results:
+        # The validation objective is the episode reward sum: shortfall minus the band penalty.
+        score = r["validation"]["mean_shortfall"] - r["validation"]["mean_penalty"]
+        print(f"Core {r['core']} (seed {r['seed']}) Train Avg Shortfall (Last 100 Eps): ${r['train_shortfall_last100']:8.2f} | "
+              f"Validation objective: {score:8.2f}")
+        if best is None or score > best[0]:
+            best = (score, r)
+    best_score, best_result = best
+    best_core, best_seed = best_result["core"], best_result["seed"]
+
+    print(f"\n[*] WINNER: Core {best_core} (Score: ${best_score:8.2f})")
+
+    # Audit C4: copy the winner to the file that test.py and evaluate.py load, and record its origin.
+    shutil.copyfile(os.path.join(run_dir, f"weights_core_{best_core}.pth"), "deep_hedging_weights.pth")
+    shutil.copyfile(os.path.join(run_dir, "config.json"), "deep_hedging_config.json")
+    with open(os.path.join(run_dir, "winner.json"), "w") as f:
+        json.dump({"core": best_core, "seed": best_seed, "validation_objective": best_score,
+                   "validation_seeds": [cfg.validation_seeds[0], cfg.validation_seeds[-1]],
+                   "cores": results}, f, indent=2)
+    print(f"Saved deep_hedging_weights.pth and {os.path.join(run_dir, 'winner.json')}")
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Train independent PPO agents, one for each core.")
@@ -231,7 +271,11 @@ def parse_args():
     parser.add_argument("--episodes", type=int, default=None, help="episodes for each core")
     parser.add_argument("--entropy-coef", type=float, default=None)
     parser.add_argument("--no-cost-shaping", action="store_true")
-    parser.add_argument("--no-penalty-shaping", action="store_true")
+    parser.add_argument("--penalty-shaping", action="store_true")
+    parser.add_argument("--core-ids", type=int, nargs="+", default=None,
+                        help="train only these cores, to split a long run into parts")
+    parser.add_argument("--select-winner", action="store_true",
+                        help="do not train. Choose the winner from the saved results of all cores")
     return parser.parse_args()
 
 if __name__ == '__main__':
@@ -245,40 +289,29 @@ if __name__ == '__main__':
         cfg.entropy_coef = args.entropy_coef
     if args.no_cost_shaping:
         cfg.cost_shaping = False
-    if args.no_penalty_shaping:
-        cfg.penalty_shaping = False
+    if args.penalty_shaping:
+        cfg.penalty_shaping = True
 
     run_dir = os.path.join("runs", args.run_name)
     os.makedirs(run_dir, exist_ok=True)
-    with open(os.path.join(run_dir, "config.json"), "w") as f:
+    config_path = os.path.join(run_dir, "config.json")
+    if args.select_winner:
+        select_winner(run_dir, load_config(config_path))
+        raise SystemExit
+    if args.core_ids is not None and os.path.exists(config_path):
+        # All parts of one run must use the same configuration.
+        with open(config_path) as f:
+            if json.load(f) != json.loads(json.dumps(cfg.to_dict())):
+                raise SystemExit(f"{config_path} differs from this configuration.")
+    with open(config_path, "w") as f:
         json.dump(cfg.to_dict(), f, indent=2)
 
+    core_ids = args.core_ids if args.core_ids is not None else list(range(cfg.num_cores))
     mp.set_start_method('spawn')
     # Audit M6: the cores train independent agents. They do not share weights, gradients or data.
-    print(f"Launching {cfg.num_cores} independent PPO-{args.arch.upper()} runs (one for each core)...")
+    print(f"Launching {len(core_ids)} independent PPO-{args.arch.upper()} runs (one for each core)...")
 
-    with mp.Pool(processes=cfg.num_cores) as pool:
-        results = pool.map(worker_process, [(i, cfg, run_dir) for i in range(cfg.num_cores)])
+    with mp.Pool(processes=len(core_ids)) as pool:
+        pool.map(worker_process, [(i, cfg, run_dir) for i in core_ids])
 
-    print("\n--- All Cores Finished PPO Training ---")
-    best_core, best_score, best_seed = -1, -float('inf'), None
-
-    for worker_id, seed, train_score, validation in results:
-        # The validation objective is the episode reward sum: shortfall minus the band penalty.
-        score = validation["mean_shortfall"] - validation["mean_penalty"]
-        print(f"Core {worker_id} (seed {seed}) Train Avg Shortfall (Last 100 Eps): ${train_score:8.2f} | "
-              f"Validation objective: {score:8.2f}")
-        if score > best_score:
-            best_score = score; best_core = worker_id; best_seed = seed
-
-    print(f"\n[*] WINNER: Core {best_core} (Score: ${best_score:8.2f})")
-
-    # Audit C4: copy the winner to the file that test.py and evaluate.py load, and record its origin.
-    shutil.copyfile(os.path.join(run_dir, f"weights_core_{best_core}.pth"), "deep_hedging_weights.pth")
-    shutil.copyfile(os.path.join(run_dir, "config.json"), "deep_hedging_config.json")
-    with open(os.path.join(run_dir, "winner.json"), "w") as f:
-        json.dump({"core": best_core, "seed": best_seed, "validation_objective": best_score,
-                   "validation_seeds": [cfg.validation_seeds[0], cfg.validation_seeds[-1]],
-                   "cores": [{"core": w, "seed": s, "train_shortfall_last100": t, "validation": v}
-                             for w, s, t, v in results]}, f, indent=2)
-    print(f"Saved deep_hedging_weights.pth and {os.path.join(run_dir, 'winner.json')}")
+    select_winner(run_dir, cfg)

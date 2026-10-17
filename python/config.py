@@ -44,7 +44,7 @@ class Config:
     reward_transform: str = "linear"  # "linear" or "entropic_step". thesis code: "entropic_step". Audit M3.
     reward_scale: float = 1000.0      # rewards are divided by this value before the transform
     risk_aversion_lambda: float = 0.05  # used only by "entropic_step"
-    penalty_shaping: bool = True      # add the projected band penalty of pending orders to the potential (pilot 5)
+    penalty_shaping: bool = False     # add the projected band penalty of pending orders to the potential. Off after pilot 5L (user decision).
     cost_shaping: bool = True         # charge the known order cost at the decision tick (potential-based). thesis code: none.
     normalize_value: bool = True      # divide rewards by a running std of the return. thesis code: False. Audit B2.
 
