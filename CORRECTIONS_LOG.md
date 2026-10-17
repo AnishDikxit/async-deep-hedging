@@ -114,6 +114,17 @@ Pilot 1 had 2,000 gradient steps. The thesis code had 32,000. ppo_epochs is now 
 - Second option if entropy stays above 0.9: entropy_coef 0.001.
 - Pass criterion: paired bootstrap 95% CI lower bound of J(agent) − J(rule) above −218, mean fills ≤ 66, and ticks outside the band ≤ rule + 10 points.
 
+### Pilot 3 diagnosis: penalty shaping (math-fixer, opus)
+
+- Cause: the cost shaping charges an order's $6 at the decision tick. Its penalty benefit reaches the advantage 49 ticks later, with weight 0.074.
+- With this asymmetry, an order is worth its cost only when the excess inventory is above about 210 shares. This explains why the agent parks 40-80 shares outside the band.
+- Proposed: Φ = −(pending_cost + projected_penalty) / reward_scale. projected_penalty is the discounted penalty of the next 49 ticks. Orders already sent fix these ticks.
+- Φ uses holdings and the agent's own past actions (observed history). The identity Σγ^t F_t = γ^T Φ(s_T) − Φ(s_0) holds on every path, so the optimal policy does not change.
+- Φ(s_0) ≠ 0 because I0 is outside the band. It depends only on I0, so it is a constant for each episode. Start with phi_prev = Φ(s_0).
+- Telescoped form: each tick the agent pays −γ^49 × penalty(holdings + in_flight). This is the quantity the rule baseline uses.
+- Fill delay verified in the cloud: an order placed at step 3 fills in step 52 (k + 49).
+- Status: proposal only. Implementation waits for a user decision.
+
 ## Process notes
 
 - `main` is named `master` in this repository. The branch was made from `origin/master`.
