@@ -1,311 +1,315 @@
-<div align="center">
-
 # Asynchronous Actor-Critic Architectures for Delta-Neutral Hedging
 
-### Optimizing Execution under Hawkes Volatility and Microstructural Latency
+Optimizing Execution under Hawkes Volatility and Microstructural Latency.
 
-**Integrated Dual Degree (B.Tech. + M.Tech.) Thesis**<br>
-**Department of Mathematical Sciences · IIT (BHU) Varanasi**<br>
-**Anish Dixit · Roll No. 21124056 · 2026**<br>
-*Supervisor: Prof. L.P. Singh*
+Integrated Dual Degree (B.Tech. + M.Tech.) Thesis, Department of Mathematical Sciences, IIT (BHU) Varanasi.
+Anish Dixit, Roll No. 21124056, 2026. Supervisor: Prof. L.P. Singh.
 
-[![Python](https://img.shields.io/badge/Python-3.8+-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
-[![C++](https://img.shields.io/badge/C++-17-00599C?style=flat-square&logo=cplusplus&logoColor=white)](https://isocpp.org)
-[![PyTorch](https://img.shields.io/badge/PyTorch-PPO--LSTM-EE4C2C?style=flat-square&logo=pytorch&logoColor=white)](https://pytorch.org)
-[![Pybind11](https://img.shields.io/badge/Pybind11-C++%2FPython-lightgrey?style=flat-square)](https://pybind11.readthedocs.io)
+## 1. What the project does
 
-*Bridging the gap between theoretical Markov Decision Processes and the asynchronous, latency-constrained realities of institutional market microstructure.*
+This project trains a reinforcement-learning agent to control share inventory when orders fill after a delay.
+A C++ market simulator creates the price path with a Hawkes process. Each order fills 50 ticks after the decision.
+The agent starts with a random inventory and must bring it into a band of ±30 shares.
+The model contains no option. "Delta-neutral" here means zero share inventory only.
 
-</div>
+### Background
 
----
+Hawkes process: a large event raises the probability of more events. This effect creates volatility clusters.
+A model with independent price increments does not show this effect.
+Latency problem: the agent sends an order, but the order is not in the inventory for 50 ticks.
+During this time the agent can send the same order again.
+The agent sees the current price and inventory. Only the execution is delayed. The task is an MDP with delayed actions.
+Two quantities are hidden: the fill time of each pending order, and the Hawkes excitation level.
+The in-flight exposure (E_t) gives only the total of the pending orders.
 
-## Overview
+Terms used in this file:
 
-Standard RL-based hedging literature assumes two things that are false in live markets: that asset prices follow **Geometric Brownian Motion**, and that trade execution is **synchronous and instantaneous**. This thesis dismantles both assumptions.
+- Implementation shortfall: final mark-to-market value minus initial mark-to-market value.
+- In-flight exposure (E_t): the total size of the orders that are sent but not yet filled.
+- Core: one independent training run with its own seed.
 
-By engineering a native **C++ matching engine** (exposed to Python via Pybind11) driven by a **self-exciting Hawkes process**, and training a **PPO-LSTM** actor-critic agent with an expanded state space that explicitly tracks pending `in_flight_exposure`, this work proves that:
+The 10 cores train 10 independent agents. They do not share weights, gradients or data.
+"Asynchronous" refers to the market execution with 50-tick latency. It does not refer to A3C-style workers.
 
-1. A standard feed-forward PPO agent **catastrophically collapses** when subjected to a 50ms execution latency queue — the *Sawtooth of Death*.
-2. A recurrent PPO-LSTM agent equipped with `in_flight_exposure` state successfully acts as a **damped harmonic oscillator**, stabilizing delta-neutral inventory and halting portfolio PnL degradation across the latency void.
+## 2. Requirements
 
----
+- Python 3.13.
+- A C++17 compiler. g++ 13.3 was verified. MSVC on Windows was not tested.
+- Packages as in `requirements.txt`:
 
-## Table of Contents
+| Package | Version |
+|---|---|
+| torch | 2.14.1 |
+| numpy | 2.5.3 |
+| matplotlib | 3.11.2 |
+| pybind11 | 3.1.0 |
+| setuptools | 84.0.0 |
+| pytest | 9.1.1 |
 
-- [Asynchronous Actor-Critic Architectures for Delta-Neutral Hedging](#asynchronous-actor-critic-architectures-for-delta-neutral-hedging)
-    - [Optimizing Execution under Hawkes Volatility and Microstructural Latency](#optimizing-execution-under-hawkes-volatility-and-microstructural-latency)
-  - [Overview](#overview)
-  - [Table of Contents](#table-of-contents)
-  - [🎯 Motivation: The Latency Void](#-motivation-the-latency-void)
-    - [Why Hawkes, not GBM?](#why-hawkes-not-gbm)
-  - [🔬 Key Contributions](#-key-contributions)
-  - [🧠 Architecture](#-architecture)
-    - [1. C++ Hawkes Matching Engine](#1-c-hawkes-matching-engine)
-    - [2. v1.0 — Synchronous "God Mode" (Feed-Forward PPO)](#2-v10--synchronous-god-mode-feed-forward-ppo)
-    - [3. v2.0 — Asynchronous POMDP (PPO-LSTM)](#3-v20--asynchronous-pomdp-ppo-lstm)
-  - [📊 Key Results](#-key-results)
-    - [Pre-Training Baseline: Untrained Agent](#pre-training-baseline-untrained-agent)
-    - [v1.0: God Mode Convergence](#v10-god-mode-convergence)
-    - [v2.0 Failure: The "Sawtooth of Death"](#v20-failure-the-sawtooth-of-death)
-    - [v2.0 Success: Recurrent Stabilization (PPO-LSTM)](#v20-success-recurrent-stabilization-ppo-lstm)
-  - [⚙️ Hyperparameters](#️-hyperparameters)
-  - [🚀 Installation \& Build](#-installation--build)
-    - [Prerequisites](#prerequisites)
-    - [Build Instructions](#build-instructions)
-  - [💻 Usage](#-usage)
-  - [📁 Repository Structure](#-repository-structure)
-  - [🔭 Future Scope](#-future-scope)
-  - [📖 Citation](#-citation)
+These versions were verified on 2026-10-17 in a Linux cloud environment.
+The versions of the thesis run were not recorded.
 
----
+## 3. Setup
 
-## 🎯 Motivation: The Latency Void
+1. Clone the repository: `git clone https://github.com/AnishDikxit/async-deep-hedging.git`
+2. Go to the folder: `cd async-deep-hedging`
+3. Create a virtual environment: `python -m venv venv`
+4. Activate it: `source venv/bin/activate` (Windows: `venv\Scripts\activate`)
+5. Install the packages: `pip install -r requirements.txt`
+6. Go to the Python folder: `cd python`
+7. Build the C++ module: `python setup.py build_ext --inplace`
+8. Return to the root folder: `cd ..`
+9. Run the tests: `python -m pytest`
 
-A delta-neutral hedger must continuously rebalance their portfolio to maintain zero directional exposure (Δ = ∂V/∂S = 0). In a theoretical zero-latency simulation — *"God Mode"* — this is straightforward: the agent observes the market, acts, and receives instantaneous execution. The environment is a well-behaved **Markov Decision Process (MDP)**.
+Expected result of step 9: `9 passed`.
+The build creates a `cpp_exchange` module file in `python/`. The repository contains no compiled file.
 
-In physical markets, every order must be serialized, transmitted across network infrastructure, and processed by the exchange gateway. This research enforces a rigid **50ms execution queue** in C++. The moment that queue is introduced:
+## 4. Run
 
-- The agent's observation at decision time `t` no longer reflects the true market state at execution time `t + 50ms`
-- The fundamental **Markov property is destroyed**
-- The environment strictly becomes a **Partially Observable MDP (POMDP)**: `⟨S, A, P, R, Ω, O, γ⟩`
-- A feed-forward network — blind to its own pending orders — enters catastrophic feedback loops
+Run all commands from the `python/` folder.
 
-This is the **Latency Void**, and solving it is the central challenge of this thesis.
-
-### Why Hawkes, not GBM?
-
-Classical finance models asset prices via GBM: `dSt = μSt dt + σSt dWt`, where volatility is constant and increments are independent. Real limit order books exhibit **volatility clustering** — a large order triggers cascading executions that self-excite further activity. The Hawkes process models this via a conditional intensity function:
-
-```
-λ(t) = μ + Σ α·exp(−β(t − tᵢ))   for all tᵢ < t
-```
-
-where `μ` is baseline intensity, `α` is the excitation jump, and `β` is the exponential decay rate. The C++ engine is driven by this equation, forcing the agent to survive micro-flash-crashes and realistic liquidity droughts.
-
-![Volatility Comparison](assets/volatility_comparison.png)
-*Top: GBM — smooth, independent increments. Bottom: Hawkes process — self-exciting, clustered volatility shocks that accurately reflect institutional order flow.*
-
----
-
-## 🔬 Key Contributions
-
-1. **C++ Hawkes Matching Engine** — A native asynchronous limit order book compiled from `src/`, exposed to Python via Pybind11. Models dynamic `T+N` execution delays, Hawkes-driven volatility clustering, and bid-ask spread slippage.
-
-2. **Distributed Rollout Architecture** — A `multiprocessing` vectorization pipeline that bypasses the Python GIL by spawning isolated worker processes each with their own C++ engine instance, saturating multi-core CPUs during PPO rollout collection.
-
-3. **Tolerance Band Reward Topography** — A non-linear utility function establishing a permissible risk corridor (±30 shares) where inventory penalties are zero, then applying a quadratic penalty beyond — balancing spread slippage against inventory risk:
-
-```
-Rₜ = ΔPnLₜ − λ · max(0, |Iₜ| − B)²
-```
-
-4. **State-Space Expansion for POMDPs** — The key fix: adding `in_flight_exposure (Eₜ)` as a fourth state feature, enabling the LSTM to track pending orders across the 50ms void and act as a damped harmonic oscillator.
-
----
-
-## 🧠 Architecture
-
-### 1. C++ Hawkes Matching Engine
-
-The core simulation runs entirely in compiled C++ (`src/exchange.cpp`) for microsecond-level throughput. Each `step()` call advances the Hawkes intensity function, fires stochastic market events, drains the **50ms latency queue** — applying execution prices from `t + 50ms`, not the decision price (this is where **slippage is realized**) — and returns `(new_price, list[FillReport])` to Python.
-
-Simulation economics: starting cash `$10,000`, initial price `$100`, spread slippage `$0.50/share`, exchange ticket fee `$1.00/order`. Mark-to-Market value: `MtMₜ = Cashₜ + (Iₜ × Pₜ)`
-
-### 2. v1.0 — Synchronous "God Mode" (Feed-Forward PPO)
-
-The baseline architecture operates as a strict MDP — zero latency, instantaneous execution.
-
-![God Mode Architecture](assets/God_Mode_Loop.drawio.png)
-
-**Topology:** Shared feature extractor (two Dense-64 layers, Layer Normalization + ReLU) splits into an Actor head (Softmax → `{Buy, Sell, Hold}`) and Critic head (Linear → scalar `V(s)`).
-
-**State vector:** `Sₜ = [Pₜ, Iₜ, Tₜ]` — normalized price, normalized inventory, time remaining.
-
-**Training:** 8,000 episodes per core across the 10-core distributed ensemble. The agent learns to drift freely within the ±30 share Tolerance Band, only crossing the spread when Hawkes volatility forces inventory into the quadratic penalty zone.
-
-### 3. v2.0 — Asynchronous POMDP (PPO-LSTM)
-
-Introducing the 50ms execution queue triggers complete policy collapse in the v1.0 agent. The solution requires both an expanded sensor array and recurrent memory.
-
-![v2 Architecture](assets/v2_architecture.drawio.png)
-
-**Expanded state vector:** `Sₜ = [Pₜ, Iₜ, Tₜ, Eₜ]` — `Eₜ` is `in_flight_exposure`, the net cumulative value of all pending-but-unfilled orders currently sitting in the 50ms queue.
-
-**Architecture:** The MLP encoder feeds into an **LSTM core** (hidden size 64) before splitting into Actor/Critic heads. LSTM gate operations at each step:
-
-```
-fₜ = σ(Wf · [hₜ₋₁, xₜ] + bf)       # Forget gate
-iₜ = σ(Wᵢ · [hₜ₋₁, xₜ] + bᵢ)       # Input gate
-c̃ₜ = tanh(Wc · [hₜ₋₁, xₜ] + bc)    # Candidate cell
-cₜ = fₜ ⊙ cₜ₋₁ + iₜ ⊙ c̃ₜ           # Cell state update
-oₜ = σ(Wo · [hₜ₋₁, xₜ] + bo)       # Output gate
-hₜ = oₜ ⊙ tanh(cₜ)                # Hidden state output
-```
-
-**Training:** Truncated Backpropagation Through Time (BPTT) with sequence horizon `T = 64` steps — sufficient to capture latency dynamics without exploding gradients during Hawkes spikes.
-
----
-
-## 📊 Key Results
-
-### Pre-Training Baseline: Untrained Agent
-
-An untrained, randomized agent shows the raw difficulty of the problem — inventory drifts monotonically to −10,000 shares with zero corrective behavior.
-
-![Baseline Evaluation](assets/baseline_evaluation.png)
-
-### v1.0: God Mode Convergence
-
-In the zero-latency environment, the feed-forward PPO agent converges successfully. It sheds a forced +500 share starting exposure in systematic discrete blocks (not a panic dump), holds within ±30 shares, and flatlines Mark-to-Market PnL at ~$46,000 across 1,000ms.
-
-![Quantitative Evaluation](assets/thesis_quantitative_evaluation.png)
-
-*The agent does not trade continuously — it allows price to drift within the Tolerance Band, only executing when Hawkes volatility forces inventory beyond ±30 shares. Zero-latency means zero unpredictable slippage, so PnL remains flat.*
-
-### v2.0 Failure: The "Sawtooth of Death"
-
-Activating the 50ms queue triggers the feed-forward agent's collapse. It observes a +500 share imbalance and fires a sell. At `t+1`, it observes the **exact same** +500 imbalance (order is trapped in queue) and fires again. The queue clears, inventory overshoots violently to −300, and the cycle repeats. PnL bleeds to −$60,000. This feedback loop is a direct consequence of the broken Markov property in a memoryless network.
-
-### v2.0 Success: Recurrent Stabilization (PPO-LSTM)
-
-Equipping the agent with LSTM memory and `in_flight_exposure` state resolves the feedback loop:
-
-![Asynchronous Evaluation](assets/thesis_v2_asynchronous_evaluation.png)
-
-The rigid sawtooth pattern is replaced by a **tightening oscillating wave** — the visual signature of a damped harmonic oscillator. The agent fires a calculated burst of orders, then "feathers the brakes," pausing while the queue clears. Inventory volatility dampens from ±300 down to a stable ±100 share band. PnL stabilizes at ~$19,000 — reduced from the frictionless case due to honest slippage accounting, but controlled and non-catastrophic.
-
-> **The core result:** A memoryless agent loses everything. The recurrent agent loses only what microstructural friction demands — and no more. Perfect delta-neutrality is mathematically impossible in a latency-constrained, self-exciting market, but the recurrent POMDP architecture successfully navigates the efficient frontier between inventory risk and microstructural friction.
-
----
-
-## ⚙️ Hyperparameters
-
-| Parameter | Value |
-|-----------|-------|
-| Optimizer | Adam |
-| Learning Rate (η) — `train_multicore.py` | 1 × 10⁻⁴ |
-| Learning Rate (η) — `train.py` (v1.0) | 3 × 10⁻⁴ |
-| Discount Factor (γ) | 0.99 |
-| PPO Clipping Parameter (ε) | 0.2 |
-| Entropy Coefficient | 0.01 |
-| Value Loss Coefficient | 0.5 |
-| LSTM Hidden State Size | 64 |
-| BPTT Sequence Horizon (T) | 64 steps |
-| Tolerance Band Boundary (B) | ±30 shares |
-| Spread Slippage | $0.50 / share |
-| Exchange Ticket Fee | $1.00 / order |
-| Starting Cash | $10,000 |
-| Starting Inventory (training) | U(−500, 500) |
-| Training Episodes | 8,000 per core (10-core ensemble) |
-
----
-
-## 🚀 Installation & Build
-
-### Prerequisites
-
-- C++17 compatible compiler (MSVC on Windows, GCC ≥ 9 or Clang ≥ 10 on Linux/macOS)
-- Python 3.8+
-- `pybind11` (installed via pip)
-
-### Build Instructions
-
-**1. Clone the repository**
-```bash
-git clone https://github.com/yourusername/async-deep-hedging.git
-cd async-deep-hedging
-```
-
-**2. Set up the virtual environment**
-```bash
-python -m venv venv
-source venv/bin/activate       # Linux / macOS
-# venv\Scripts\activate        # Windows
-pip install -r requirements.txt
-```
-
-**3. Compile the C++ matching engine**
-
-The engine is built using Python's `setuptools` and Pybind11 via `python/setup.py`. Run from the `python/` directory (where `exchange.cpp` and `setup.py` are co-located):
+### Train
 
 ```bash
-cd python
-python setup.py build_ext --inplace
+python train_multicore.py --run-name main
 ```
 
-This compiles `exchange.cpp` into a native Python extension module (`cpp_exchange`). The resulting file will be named `cpp_exchange.cpXXX-*.so` (Linux/macOS) or `cpp_exchange.cpXXX-win_amd64.pyd` (Windows) and is imported directly by the training and evaluation scripts. A pre-compiled Windows binary (`cpp_exchange.cp312-win_amd64.pyd`) is included in `src/` for reference.
+Options: `--arch lstm|mlp`, `--no-in-flight`, `--base-seed N`, `--cores N`, `--episodes N`, `--entropy-coef X`, `--no-cost-shaping`, `--penalty-shaping`, `--core-ids K ...`, `--select-winner`.
+Expected output:
 
----
-
-## 💻 Usage
-
-All scripts must be run from the `python/` directory (so that `cpp_exchange` and the weight files are on the path).
-
-**Train the PPO-LSTM agent (asynchronous v2.0, distributed across 10 cores):**
-```bash
-cd python
-python train_multicore.py
 ```
-Trained weights are saved per-core as `weights_core_N.pth`. The script reports the winning core at the end.
+Launching 10 independent PPO-LSTM runs (one for each core)...
+[Core 0] Episode 0048 | Shortfall: $<value> | critic/actor loss: <value>
+Core 0 (seed 0) Train Avg Shortfall (Last 100 Eps): $<value> | Validation objective: <value>
+[*] WINNER: Core <k> (Score: $<value>)
+Saved deep_hedging_weights.pth and runs/main/winner.json
+```
 
-**Evaluate a trained checkpoint:**
+A smoke test takes about 15 s in the cloud environment:
+
 ```bash
-cd python
+python train_multicore.py --run-name smoke --cores 1 --episodes 48
+```
+
+### Ablation
+
+The ablation has four configurations and five seeds for each configuration.
+The configurations are LSTM or MLP, each with or without E_t. For example:
+
+```bash
+python train_multicore.py --run-name lstm_inflight_s0 --arch lstm --base-seed 0
+python train_multicore.py --run-name mlp_noinflight_s0 --arch mlp --no-in-flight --base-seed 0
+```
+
+Each run writes `deep_hedging_weights.pth`. You must evaluate each run before the next run starts, or copy the file.
+
+### Evaluate
+
+```bash
+python evaluate.py --policies agent rule twap
+```
+
+The command uses all 1,000 test seeds (seeds 0-999). Expected output:
+
+```
+policy    mean IS     std IS   CVaR5 IS  RMS inv   %out   fills
+...
+Saved results/eval_summary.json
+```
+
+The next command needs no checkpoint and takes about 3 s:
+
+```bash
+python evaluate.py --policies rule twap --num-seeds 20
+```
+
+### One-episode figure
+
+```bash
 python test.py
 ```
-Loads `deep_hedging_weights.pth` from the `python/` directory, runs a 1,000-tick asynchronous simulation, and saves the evaluation plot as `thesis_v2_asynchronous_evaluation.png`.
 
-**Train the synchronous God Mode baseline (v1.0, single-core REINFORCE):**
-```bash
-cd python
-python train.py
-```
-Uses the feed-forward `RLAgent` in a zero-latency environment. Saves weights to `deep_hedging_weights.pth`.
+The script prints the implementation shortfall and the legacy mark-to-market PnL.
+It also prints the orders sent, the fills, the spread and fees, and the band penalty. It saves `thesis_v2_asynchronous_evaluation.png`.
 
-**Regenerate the GBM vs. Hawkes volatility comparison plot:**
+### Volatility figure
+
 ```bash
-cd python
 python generate_plot.py
 ```
-Saves `volatility_comparison.png` to the current directory.
 
----
+The script saves `volatility_comparison.png`.
 
-## 📁 Repository Structure
+## 5. Project layout
 
 ```
 async-deep-hedging/
-├── src/                              # C++ matching engine source
-│   ├── exchange.cpp                  # Hawkes LOB + 50ms latency queue (Pybind11)
-│   ├── main.cpp                      # Standalone C++ entry point (for direct testing)
-│   └── cpp_exchange.cp312-win_amd64.pyd  # Pre-compiled Windows extension (Python 3.12)
-├── python/                           # Python training & evaluation
-│   ├── setup.py                      # Pybind11 build script (compiles exchange.cpp)
-│   ├── environment.py                # Gym-compatible POMDP environment wrapper
-│   ├── agent.py                      # ActorCriticLSTM + PPOAgentLSTM (PyTorch)
-│   ├── train_multicore.py            # Distributed PPO-LSTM training (10-core ensemble)
-│   ├── train.py                      # Single-core REINFORCE baseline (v1.0 God Mode)
-│   ├── test.py                       # Asynchronous evaluation & plot generation
-│   ├── generate_plot.py              # GBM vs. Hawkes volatility comparison plot
-│   └── deep_hedging_weights.pth      # Saved weights for evaluation (loaded by test.py)
-├── assets/                           # Result plots and architecture diagrams
-├── build/                            # Build output directory
-├── .gitignore
-└── README.md
+├── src/exchange.cpp        # C++ simulator: Hawkes process, 50-tick latency queue
+├── python/
+│   ├── config.py           # all hyperparameters (single source)
+│   ├── environment.py      # environment, reward, implementation shortfall
+│   ├── agent.py            # network and PPO agent
+│   ├── train_multicore.py  # training, one independent run for each core
+│   ├── evaluate.py         # agent, rule and TWAP on fixed test seeds
+│   ├── test.py             # one-episode evaluation and figure
+│   ├── generate_plot.py    # volatility figure
+│   └── setup.py            # build script for the C++ module
+├── tests/                  # pytest tests
+├── legacy/                 # old v1 files, not runnable
+├── assets/                 # figures
+├── docs/AUDIT_REPORT_v2.md # audit of the thesis code
+├── requirements.txt
+└── CORRECTIONS_LOG.md
 ```
 
----
+## 6. Results
 
-## 🔭 Future Scope
+### Simulator rules
 
-- **Adversarial Multi-Agent Dynamics** — Introduce competing RL agents into the same LOB to test whether the LSTM can detect and exploit predatory liquidity sweeps.
-- **Limit Order Rebate Optimization** — Expand the action space to passive limit orders, transitioning from pure hedger to market maker optimizing rebate capture while managing adverse selection risk.
-- **Variable Latency Jitter** — Replace the static 50ms queue with stochastic latency distributions to stress-test LSTM temporal memory under chaotic real-world routing dynamics.
+- Agent orders do not enter the order book. Each order is a market order. The price argument is ignored.
+- Each order fills completely at the price 50 ticks later, plus or minus $0.50, plus a $1 fee.
+- The order size is fixed at 10 shares. The start cash is $10,000 and the start price is $100.
+- The simulator has no market impact, no liquidity limit and no variable spread.
+- Reward: R_t = ΔMTM_t − 0.001 · max(0, |I_t| − 30)². The penalty is part of the reward only.
+- Hawkes intensity for each tick: x_t = 0.98 · x_(t−1), then λ_t = min(1, 0.02 + x_t).
+  An event occurs with probability λ_t. Each event adds alpha_jump to x_t.
+- The thesis code used alpha_jump 0.15. This gives a branching ratio of 7.35 and an unstable process.
+  The audit report gives 7.5.
+- The default is now alpha_jump 0.012. The branching ratio is 0.588. The stable event rate is 0.0485 per tick.
+  `tests/test_exchange.py` checks these values.
 
----
+### Legacy results (thesis code)
 
-## 📖 Citation
+All figures in `assets/` came from the thesis code. The current code has different defaults.
+The figures are legacy results. The existing checkpoints do not load into the new network, because it has an MLP encoder.
+
+![Asynchronous evaluation](assets/thesis_v2_asynchronous_evaluation.png)
+
+Fig. 4.3 (`assets/thesis_v2_asynchronous_evaluation.png`) shows a decaying limit cycle in one episode.
+The agent sends orders on most ticks. Inventory oscillates with overshoots of about ±100 to ±300 shares.
+These overshoots continue to the end of the episode.
+
+| Number | Value | Source |
+|---|---|---|
+| Value at the end of the PnL curve | near $19,000. This is mark-to-market value minus starting cash. It includes the initial inventory value (+250 shares × $100 = $25,000 at t = 0) and the band penalty. | `assets/thesis_v2_asynchronous_evaluation.png` |
+| Implementation shortfall | approximately −$6,400 | audit estimate from the figure, `docs/AUDIT_REPORT_v2.md`, finding C1; not measured again |
+| Trades and cost | about 900 trades, about $5,400 | audit estimate from the figure, `docs/AUDIT_REPORT_v2.md`, finding C5; not measured again |
+
+Fig. 4.3 is one episode with no baseline.
+No ablation separates the effect of E_t from the effect of the LSTM. The data does not show that the LSTM is necessary.
+
+### New metrics
+
+Results: pending a local run. The checkpoints exist only on the author's local machine.
+`evaluate.py` runs 1,000 fixed test seeds (seeds 0-999) against a rule baseline and a TWAP baseline.
+Output files:
+
+| File | Content |
+|---|---|
+| `python/results/eval_summary.json` | summary of each policy |
+| `python/results/eval_<policy>.csv` | one row for each test seed |
+| `python/runs/<run_name>/config.json` | configuration of the run |
+| `python/runs/<run_name>/winner.json` | winning core and validation scores |
+
+### Hyperparameters
+
+`python/config.py` is the single source. Each training run saves its values in `config.json`.
+
+| Parameter | config.py default | Value in the thesis code (Fig. 4.3) |
+|---|---|---|
+| alpha_jump | 0.012 | 0.15 |
+| Initial inventory I0 | U(-500, 500), integers | {-500, -250, 250, 500} |
+| Learning rate | 1e-4 | 1e-4 |
+| Discount gamma | 0.999 | 0.99 |
+| GAE lambda | 0.95 | 0.95 |
+| Clip | 0.2 | 0.2 |
+| PPO epochs | 10 | 4 |
+| Entropy coefficient | 0.01 | 0.05 |
+| Value coefficient | 0.5 | 0.5 |
+| Max grad norm | 0.5 | 0.5 |
+| BPTT | truncated, 64 ticks | full, 1,000 ticks |
+| Reward | linear (reward / 1000) | entropic utility on each step (lambda 0.05) |
+| Value scaling | running std | none |
+| Cost shaping | on: the $6 order cost is charged at the decision tick (potential-based) | none |
+| Penalty shaping | off (option: the band penalty of pending orders is charged at the decision tick) | none |
+| Environments per core | 16 (4 minibatches) | 1 |
+| Network | MLP encoder, LSTM 64, actor and critic heads | LSTM 64, heads (no encoder) |
+| Episodes per core | 24,000 | 8,000 |
+| Cores | 10 | 10 |
+| Latency | 50 ticks | 50 ticks |
+| Band and penalty | ±30, 0.001 × excess² (reward only) | same coefficient, but taken from cash |
+
+## 7. Known limits
+
+- The model contains no option. The task is inventory control under execution latency.
+  The agent liquidates toward a band of ±30 shares. "Delta-neutral" means zero share inventory only.
+- Agent orders have no market impact, no liquidity limit and no variable spread.
+- The figures in `assets/` are legacy results from the thesis code. The checkpoints do not load into the current network.
+- Fig. 4.3 is one episode with no baseline. No ablation separates E_t from the LSTM.
+- No multi-seed result exists yet. It needs the checkpoints from the author's local machine.
+- The v1 synchronous system is historical. Its code is in `legacy/` and cannot run. Its results were not kept.
+- The software versions of the thesis run were not recorded.
+- The audit report lists more open findings: `docs/AUDIT_REPORT_v2.md`.
+
+### Historical figures
+
+These figures cannot be reproduced from this repository.
+
+| File | Caption in the old README | Status |
+|---|---|---|
+| `assets/baseline_evaluation.png` | untrained agent | code version not recorded, not reproducible |
+| `assets/God_Mode_Loop.drawio.png` | v1 zero-latency design | v1 diagram, not reproducible |
+| `assets/thesis_quantitative_evaluation.png` | v1 zero-latency evaluation, MTM PnL near $46,000 | v1 result, not reproducible. The value includes the initial inventory value. |
+| `assets/v2_architecture.drawio.png` | v2 design | drawn for the thesis design, not the current network |
+| `assets/volatility_comparison.png` | volatility comparison | thesis Fig. 2.1, from an illustration model, not the engine |
+
+`python/generate_plot.py` now adds a third panel from the C++ engine.
+
+## 8. Diagrams
+
+### Data flow in one tick
+
+```mermaid
+flowchart LR
+    A[Agent] --> B[place_order]
+    B --> C["Latency queue (50 ticks)"]
+    C --> D["Fill at price of tick t+50"]
+    D --> E[Environment settlement]
+    E --> F["State: price, holdings, time, E_t"]
+    F --> A
+```
+
+In each tick, the agent can send an order. The order fills 50 ticks later at the price of that tick.
+
+### Delayed-action transition
+
+```mermaid
+flowchart TD
+    A["Decision at tick t"] --> B["E_t increases"]
+    B --> C["Ticks t+1 to t+49: order waits"]
+    C --> D["Fill at tick t+50"]
+    D --> E["Holdings change"]
+    E --> F["E_t decreases"]
+```
+
+The decision changes E_t at once, but the order changes the holdings only at tick t+50.
+
+### Training loop of one core
+
+```mermaid
+flowchart TD
+    A["Reset 16 environments with seeds"] --> B["Collect 1,000 ticks"]
+    B --> C[GAE]
+    C --> D["PPO epochs with truncated BPTT"]
+    D --> E{"24,000 episodes done?"}
+    E -- no --> A
+    E -- yes --> F["Evaluate on validation seeds"]
+    F --> G["Copy the winner"]
+```
+
+Each core runs this loop alone, and the best core by validation score is copied.
+
+## Citation
 
 ```bibtex
 @mastersthesis{dixit2026async,
@@ -318,12 +322,3 @@ async-deep-hedging/
   department = {Department of Mathematical Sciences}
 }
 ```
-
----
-
-<div align="center">
-
-*Department of Mathematical Sciences · IIT (BHU) Varanasi · 2026*<br>
-*Supervised by Prof. L.P. Singh*
-
-</div>

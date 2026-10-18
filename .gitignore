@@ -12,3 +12,10 @@ __pycache__/
 # C++ Compiled Executables
 market_sim
 build/
+# Audit B8: never commit checkpoints, compiled modules or run output
+*.pt
+*.pyd
+*.dll
+*.o
+runs/
+.pytest_cache/

@@ -1,19 +1,20 @@
 import os
+import json
+import random
+import shutil
+import argparse
 import torch
 import torch.nn as nn
 import numpy as np
 import multiprocessing as mp
-from environment import TradingEnvironment
+from environment import VectorTradingEnvironment
 from agent import PPOAgentLSTM # Using the new LSTM Brain!
+from config import Config, TRAIN_SEED_OFFSET
+from evaluate import AgentPolicy, run_episodes, summarize, load_config
 
 # --- HYPERPARAMETERS ---
-TOTAL_EPISODES = 8000
-NUM_CORES = 10 
-RISK_AVERSION_LAMBDA = 0.05
-PPO_EPOCHS = 4           
-CLIP_EPSILON = 0.2       
-GAMMA = 0.99             
-GAE_LAMBDA = 0.95        
+# Audit C6: all hyperparameters are in config.py.
+# Each run writes them to runs/<run_name>/config.json.
 
 def calculate_entropic_utility(raw_pnl, lambda_val):
     scaled_pnl = raw_pnl / 1000.0
@@ -21,115 +22,296 @@ def calculate_entropic_utility(raw_pnl, lambda_val):
     exponent = np.clip(-lambda_val * clipped_pnl, -40.0, 40.0)
     return float((1.0 - np.exp(exponent)) / lambda_val)
 
-def worker_process(worker_id):
-    torch.set_num_threads(1) 
-    env = TradingEnvironment()
-    agent = PPOAgentLSTM(learning_rate=1e-4)
-    
-    weights_path = f"weights_core_{worker_id}.pth"
+def transform_reward(raw_rewards, cfg):
+    if cfg.reward_transform == "entropic_step":
+        # Audit M3: this applies the utility to each step reward.
+        # The sum of these values is not the entropic risk of the terminal PnL.
+        return np.array([calculate_entropic_utility(r, cfg.risk_aversion_lambda) for r in raw_rewards])
+    return raw_rewards / cfg.reward_scale
+
+def shaping_potential(envs, cfg):
+    # Pilot 3: the cost was charged at once, but the penalty benefit of an order came 49 ticks later.
+    # The projected penalty puts both effects of an order at the decision tick.
+    pending = envs.pending_cost()
+    if cfg.penalty_shaping:
+        pending = pending + envs.projected_penalty(cfg.gamma)
+    return -pending / cfg.reward_scale
+
+def apply_cost_shaping(utility, envs, phi_prev, done, cfg):
+    # Pilot 2: the $6 cost of an order reached the reward only at the fill, 50 ticks later,
+    # and was lost in the price noise. Potential-based shaping charges it at the decision tick.
+    # Phi(s) = shaping_potential(). Phi is 0 at the end of the episode. At the start it is 0 for the cost part
+    # and a constant of each episode for the penalty part. So the discounted sum of rewards changes only by
+    # -Phi(s_0), and the optimal policy does not change (Ng et al., 1999).
+    phi_next = np.zeros(len(utility)) if done else shaping_potential(envs, cfg)
+    return utility + cfg.gamma * phi_next - phi_prev, phi_next
+
+class RunningReturnStd:
+    # Audit B2: divide rewards by a running std of the discounted return.
+    # A positive scale does not change the optimal policy. It keeps the critic loss near the actor loss.
+    def __init__(self, num_envs, gamma):
+        self.gamma = gamma
+        self.returns = np.zeros(num_envs)
+        self.mean, self.var, self.count = 0.0, 1.0, 1e-4
+
+    def reset_returns(self):
+        self.returns[:] = 0.0
+
+    def update_and_scale(self, rewards):
+        self.returns = self.returns * self.gamma + rewards
+        batch_mean, batch_var, n = self.returns.mean(), self.returns.var(), len(self.returns)
+        delta = batch_mean - self.mean
+        total = self.count + n
+        self.mean += delta * n / total
+        self.var = (self.var * self.count + batch_var * n + delta ** 2 * self.count * n / total) / total
+        self.count = total
+        return rewards / np.sqrt(self.var + 1e-8)
+
+def worker_process(job):
+    worker_id, cfg, run_dir = job
+    torch.set_num_threads(1)
+
+    # Audit B1: each core has its own seed. Without this, all cores start with the same weights.
+    seed = cfg.base_seed + worker_id
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+    random.seed(seed)
+    seed_rng = np.random.default_rng(seed)
+
+    # The batched environment steps all simulators in one C++ call.
+    envs = VectorTradingEnvironment(cfg.num_envs, cfg)
+    agent = PPOAgentLSTM(learning_rate=cfg.learning_rate, hidden_dim=cfg.hidden_dim, use_lstm=cfg.use_lstm)
+
+    weights_path = os.path.join(run_dir, f"weights_core_{worker_id}.pth")
     if os.path.exists(weights_path):
         try: agent.policy_network.load_state_dict(torch.load(weights_path))
-        except: pass 
-            
+        except Exception as error:
+            # A checkpoint from another architecture cannot load. Training then starts from new weights.
+            print(f"[Core {worker_id}] Could not load {weights_path}: {error}")
+
     history_pnl = []
-    
-    for episode in range(1, TOTAL_EPISODES + 1):
-        state = env.reset()
-        
+    # Diagnostics for each update. They show whether the policy learns to hold and whether the critic fits.
+    log_path = os.path.join(run_dir, f"train_log_core_{worker_id}.csv")
+    log_file = open(log_path, "w")
+    log_file.write("update,episode,shortfall,penalty,fills,hold_fraction,entropy,explained_variance,critic_actor_ratio\n")
+    reward_norm = RunningReturnStd(cfg.num_envs, cfg.gamma) if cfg.normalize_value else None
+    num_updates = cfg.total_episodes // cfg.num_envs
+
+    for update in range(1, num_updates + 1):
+        # Audit B1: record a market seed for each episode, so that each episode can be run again.
+        episode_seeds = (TRAIN_SEED_OFFSET + seed_rng.integers(0, 10**9, size=cfg.num_envs)).tolist()
+        states = envs.reset(episode_seeds)
+
         # THE FIX: Wipe the LSTM's memory clean at the start of every episode
-        hidden = agent.get_initial_hidden()
-        
+        hidden = agent.get_initial_hidden(cfg.num_envs)
+        if reward_norm is not None:
+            reward_norm.reset_returns()
+        # No order is pending at reset. With penalty shaping, Phi(s_0) is not 0 because I0 is outside the band.
+        # Phi(s_0) depends only on I0, so it is a constant for each episode and does not bias the policy.
+        phi_prev = shaping_potential(envs, cfg) if cfg.cost_shaping else np.zeros(cfg.num_envs)
+
         buffer_states, buffer_actions, buffer_logprobs = [], [], []
         buffer_rewards, buffer_state_values = [], []
-        
+
         while True:
             # The AI reads the state AND its own memory
-            action, log_prob, _, state_value, hidden = agent.select_action(state, hidden)
-            next_state, reward, done = env.step(action)
-            
-            utility = calculate_entropic_utility(reward, RISK_AVERSION_LAMBDA)
-            
-            buffer_states.append(state)
-            buffer_actions.append(action)
-            buffer_logprobs.append(log_prob)
-            buffer_state_values.append(state_value)
+            # Audit B3, B7: num_envs environments run in lockstep and share one forward pass.
+            actions, log_probs, _, state_values, hidden = agent.select_action(states, hidden)
+            # All episodes have the same length, so all environments finish on the same tick.
+            next_states, rewards, done = envs.step(actions)
+
+            utility = transform_reward(rewards, cfg)
+            if cfg.cost_shaping:
+                utility, phi_prev = apply_cost_shaping(utility, envs, phi_prev, done, cfg)
+            if reward_norm is not None:
+                utility = reward_norm.update_and_scale(utility)
+
+            buffer_states.append(states)
+            buffer_actions.append(actions + 1)  # network index = action + 1 for ACTION_MAPPING [-1, 0, 1]
+            buffer_logprobs.append(log_probs)
+            buffer_state_values.append(state_values)
             buffer_rewards.append(utility)
-            
-            state = next_state
-            
+
+            states = next_states
+
             # We only perform PPO Math at the EXACT end of an episode
             if done:
-                _, _, _, next_state_value, _ = agent.select_action(state, hidden)
-                
-                advantages = []
-                gae = 0
-                for step in reversed(range(len(buffer_rewards))):
-                    if step == len(buffer_rewards) - 1:
-                        next_val = next_state_value.item()
+                rewards_arr = np.stack(buffer_rewards, axis=1)                   # [N, T]
+                values_arr = torch.stack(buffer_state_values, dim=1).numpy()     # [N, T]
+                num_steps = rewards_arr.shape[1]
+
+                advantages = np.zeros_like(rewards_arr)
+                gae = np.zeros(cfg.num_envs)
+                for step in reversed(range(num_steps)):
+                    if step == num_steps - 1:
+                        # Audit B4: no bootstrap value at the terminal step. The state includes the remaining time.
+                        next_val = 0.0
                         is_terminal = 1 # End of the simulation
                     else:
-                        next_val = buffer_state_values[step + 1].item()
+                        next_val = values_arr[:, step + 1]
                         is_terminal = 0 # Middle of the sequence
-                        
-                    delta = buffer_rewards[step] + GAMMA * next_val * (1 - is_terminal) - buffer_state_values[step].item()
-                    gae = delta + GAMMA * GAE_LAMBDA * (1 - is_terminal) * gae
-                    advantages.insert(0, gae)
-                
-                # Format exactly for the LSTM: [1 Batch, 1000 Sequence Steps, 3 Features]
-                old_states = torch.FloatTensor(np.array(buffer_states)).unsqueeze(0) 
-                old_actions = buffer_actions
-                old_logprobs = torch.stack(buffer_logprobs).detach()
-                old_state_values = torch.stack(buffer_state_values).detach()
-                advantages_tensor = torch.FloatTensor(advantages).detach()
-                
+
+                    delta = rewards_arr[:, step] + cfg.gamma * next_val * (1 - is_terminal) - values_arr[:, step]
+                    gae = delta + cfg.gamma * cfg.gae_lambda * (1 - is_terminal) * gae
+                    advantages[:, step] = gae
+
+                # Format exactly for the LSTM: [N Batch, 1000 Sequence Steps, 4 Features]
+                old_states = torch.as_tensor(np.stack(buffer_states, axis=1), dtype=torch.float32)
+                old_actions = torch.as_tensor(np.stack(buffer_actions, axis=1), dtype=torch.long)
+                old_logprobs = torch.stack(buffer_logprobs, dim=1).detach()
+                old_state_values = torch.as_tensor(values_arr, dtype=torch.float32)
+                advantages_tensor = torch.as_tensor(advantages, dtype=torch.float32)
+
                 returns = advantages_tensor + old_state_values
+                # Explained variance near 1 means the critic predicts the returns well. Near 0 or below means it does not.
+                returns_np = advantages + values_arr
+                explained_variance = 1.0 - np.var(returns_np - values_arr) / (np.var(returns_np) + 1e-8)
+                hold_fraction = float(np.mean(np.stack(buffer_actions) == 1))  # network index 1 = hold
                 advantages_tensor = (advantages_tensor - advantages_tensor.mean()) / (advantages_tensor.std() + 1e-8)
-                
+
                 # Backpropagate through time
-                initial_hidden_for_update = agent.get_initial_hidden()
-                
-                for _ in range(PPO_EPOCHS):
-                    logprobs, state_values, dist_entropy = agent.evaluate(old_states, old_actions, initial_hidden_for_update)
-                    
-                    ratios = torch.exp(logprobs - old_logprobs)
-                    surr1 = ratios * advantages_tensor
-                    surr2 = torch.clamp(ratios, 1 - CLIP_EPSILON, 1 + CLIP_EPSILON) * advantages_tensor
-                    
-                    actor_loss = -torch.min(surr1, surr2).mean()
-                    critic_loss = nn.MSELoss()(state_values, returns)
-                    
-                    loss = actor_loss + 0.5 * critic_loss - 0.05 * dist_entropy.mean()
-                    
-                    agent.optimizer.zero_grad()
-                    loss.backward()
-                    torch.nn.utils.clip_grad_norm_(agent.policy_network.parameters(), max_norm=0.5)
-                    agent.optimizer.step()
-                
-                terminal_pnl = env.cash + (env.holdings * env.current_price) - env.starting_cash
-                history_pnl.append(terminal_pnl)
+                # Audit B3: each minibatch holds full sequences, because the LSTM needs the time order.
+                for _ in range(cfg.ppo_epochs):
+                    for mb in torch.randperm(cfg.num_envs).chunk(cfg.num_minibatches):
+                        initial_hidden_for_update = agent.get_initial_hidden(len(mb))
+                        logprobs, state_values, dist_entropy = agent.evaluate(
+                            old_states[mb], old_actions[mb], initial_hidden_for_update, cfg.tbptt_len)
+
+                        ratios = torch.exp(logprobs - old_logprobs[mb])
+                        surr1 = ratios * advantages_tensor[mb]
+                        surr2 = torch.clamp(ratios, 1 - cfg.clip_epsilon, 1 + cfg.clip_epsilon) * advantages_tensor[mb]
+
+                        actor_loss = -torch.min(surr1, surr2).mean()
+                        critic_loss = nn.MSELoss()(state_values, returns[mb])
+
+                        loss = actor_loss + cfg.value_coef * critic_loss - cfg.entropy_coef * dist_entropy.mean()
+
+                        agent.optimizer.zero_grad()
+                        loss.backward()
+                        torch.nn.utils.clip_grad_norm_(agent.policy_network.parameters(), max_norm=cfg.max_grad_norm)
+                        agent.optimizer.step()
+
+                # Audit C1: report the implementation shortfall, not cash + holdings * price - starting cash.
+                episode_shortfalls = envs.implementation_shortfall().tolist()
+                history_pnl.extend(episode_shortfalls)
+                terminal_pnl = float(np.mean(episode_shortfalls))
+                mean_penalty = float(envs.total_penalty.mean())
+                mean_fills = float(envs.num_fills.mean())
+                entropy = float(dist_entropy.mean().item())
+                loss_ratio = cfg.value_coef * critic_loss.item() / (abs(actor_loss.item()) + 1e-8)
                 break
-                
-        if episode % 500 == 0:
+
+        episode = update * cfg.num_envs
+        log_file.write(f"{update},{episode},{terminal_pnl:.2f},{mean_penalty:.2f},{mean_fills:.1f},"
+                       f"{hold_fraction:.4f},{entropy:.4f},{explained_variance:.4f},{loss_ratio:.4f}\n")
+        log_file.flush()
+        if update % max(1, 500 // cfg.num_envs) == 0:
             torch.save(agent.policy_network.state_dict(), weights_path)
-        if episode % 50 == 0:
-            print(f"[Core {worker_id}] Episode {episode:04d} | PnL: ${terminal_pnl:8.2f}")
+        if update % max(1, 50 // cfg.num_envs) == 0:
+            # Audit B2: the loss ratio shows whether the critic gradient is much larger than the actor gradient.
+            print(f"[Core {worker_id}] Episode {episode:04d} | Shortfall: ${terminal_pnl:8.2f} | "
+                  f"critic/actor loss: {loss_ratio:8.2f} | penalty: {mean_penalty:9.1f} | fills: {mean_fills:5.1f} | "
+                  f"hold: {hold_fraction:.2f} | entropy: {entropy:.3f} | expl. var: {explained_variance:5.2f}")
 
     torch.save(agent.policy_network.state_dict(), weights_path)
-    return worker_id, np.mean(history_pnl[-100:])
+    log_file.close()
+
+    # Audit C4: select the winner on separate validation seeds, not on the training PnL.
+    agent.policy_network.eval()
+    validation = summarize(run_episodes(AgentPolicy(agent), cfg.validation_seeds, cfg))
+    result = {"core": worker_id, "seed": seed, "train_shortfall_last100": float(np.mean(history_pnl[-100:])),
+              "validation": validation}
+    # A run in parts (--core-ids) chooses the winner from these files.
+    with open(os.path.join(run_dir, f"result_core_{worker_id}.json"), "w") as f:
+        json.dump(result, f, indent=2)
+    return result
+
+def select_winner(run_dir, cfg):
+    results = []
+    for worker_id in range(cfg.num_cores):
+        path = os.path.join(run_dir, f"result_core_{worker_id}.json")
+        if os.path.exists(path):
+            with open(path) as f:
+                results.append(json.load(f))
+    missing = sorted(set(range(cfg.num_cores)) - {r["core"] for r in results})
+    if missing:
+        print(f"Cores {missing} have no result yet. Train them with --core-ids, then run --select-winner.")
+        return
+
+    print("\n--- All Cores Finished PPO Training ---")
+    best = None
+    for r in results:
+        # The validation objective is the episode reward sum: shortfall minus the band penalty.
+        score = r["validation"]["mean_shortfall"] - r["validation"]["mean_penalty"]
+        print(f"Core {r['core']} (seed {r['seed']}) Train Avg Shortfall (Last 100 Eps): ${r['train_shortfall_last100']:8.2f} | "
+              f"Validation objective: {score:8.2f}")
+        if best is None or score > best[0]:
+            best = (score, r)
+    best_score, best_result = best
+    best_core, best_seed = best_result["core"], best_result["seed"]
+
+    print(f"\n[*] WINNER: Core {best_core} (Score: ${best_score:8.2f})")
+
+    # Audit C4: copy the winner to the file that test.py and evaluate.py load, and record its origin.
+    shutil.copyfile(os.path.join(run_dir, f"weights_core_{best_core}.pth"), "deep_hedging_weights.pth")
+    shutil.copyfile(os.path.join(run_dir, "config.json"), "deep_hedging_config.json")
+    with open(os.path.join(run_dir, "winner.json"), "w") as f:
+        json.dump({"core": best_core, "seed": best_seed, "validation_objective": best_score,
+                   "validation_seeds": [cfg.validation_seeds[0], cfg.validation_seeds[-1]],
+                   "cores": results}, f, indent=2)
+    print(f"Saved deep_hedging_weights.pth and {os.path.join(run_dir, 'winner.json')}")
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Train independent PPO agents, one for each core.")
+    parser.add_argument("--run-name", default="default")
+    parser.add_argument("--arch", choices=["lstm", "mlp"], default="lstm", help="mlp is the ablation of audit C3")
+    parser.add_argument("--no-in-flight", action="store_true", help="hide in_flight_exposure (ablation of audit C3)")
+    parser.add_argument("--base-seed", type=int, default=0)
+    parser.add_argument("--cores", type=int, default=None)
+    parser.add_argument("--episodes", type=int, default=None, help="episodes for each core")
+    parser.add_argument("--entropy-coef", type=float, default=None)
+    parser.add_argument("--no-cost-shaping", action="store_true")
+    parser.add_argument("--penalty-shaping", action="store_true")
+    parser.add_argument("--core-ids", type=int, nargs="+", default=None,
+                        help="train only these cores, to split a long run into parts")
+    parser.add_argument("--select-winner", action="store_true",
+                        help="do not train. Choose the winner from the saved results of all cores")
+    return parser.parse_args()
 
 if __name__ == '__main__':
+    args = parse_args()
+    cfg = Config(use_lstm=(args.arch == "lstm"), observe_in_flight=not args.no_in_flight, base_seed=args.base_seed)
+    if args.cores is not None:
+        cfg.num_cores = args.cores
+    if args.episodes is not None:
+        cfg.total_episodes = args.episodes
+    if args.entropy_coef is not None:
+        cfg.entropy_coef = args.entropy_coef
+    if args.no_cost_shaping:
+        cfg.cost_shaping = False
+    if args.penalty_shaping:
+        cfg.penalty_shaping = True
+
+    run_dir = os.path.join("runs", args.run_name)
+    os.makedirs(run_dir, exist_ok=True)
+    config_path = os.path.join(run_dir, "config.json")
+    if args.select_winner:
+        select_winner(run_dir, load_config(config_path))
+        raise SystemExit
+    if args.core_ids is not None and os.path.exists(config_path):
+        # All parts of one run must use the same configuration.
+        with open(config_path) as f:
+            if json.load(f) != json.loads(json.dumps(cfg.to_dict())):
+                raise SystemExit(f"{config_path} differs from this configuration.")
+    with open(config_path, "w") as f:
+        json.dump(cfg.to_dict(), f, indent=2)
+
+    core_ids = args.core_ids if args.core_ids is not None else list(range(cfg.num_cores))
     mp.set_start_method('spawn')
-    print(f"Launching Asynchronous PPO-LSTM Ensemble across {NUM_CORES} Cores...")
-    
-    with mp.Pool(processes=NUM_CORES) as pool:
-        results = pool.map(worker_process, range(NUM_CORES))
-        
-    print("\n--- All Cores Finished PPO Training ---")
-    best_core, best_score = -1, -float('inf')
-    
-    for worker_id, score in results:
-        print(f"Core {worker_id} Final Avg PnL (Last 100 Eps): ${score:8.2f}")
-        if score > best_score:
-            best_score = score; best_core = worker_id
-            
-    print(f"\n[*] WINNER: Core {best_core} (Score: ${best_score:8.2f})")
+    # Audit M6: the cores train independent agents. They do not share weights, gradients or data.
+    print(f"Launching {len(core_ids)} independent PPO-{args.arch.upper()} runs (one for each core)...")
+
+    with mp.Pool(processes=len(core_ids)) as pool:
+        pool.map(worker_process, [(i, cfg, run_dir) for i in core_ids])
+
+    select_winner(run_dir, cfg)

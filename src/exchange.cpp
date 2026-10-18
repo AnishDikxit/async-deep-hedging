@@ -4,8 +4,12 @@
 #include <cstdlib>
 #include <ctime>
 #include <algorithm>
+#include <random>
+#include <stdexcept>
+#include <cstdint>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h> // CRITICAL: Allows returning vectors and pairs to Python
+#include <pybind11/numpy.h>
 
 namespace py = pybind11;
 
@@ -35,6 +39,8 @@ struct CompareOrder {
 
 class MarketSimulator {
 private:
+    // Audit M1: the book holds only random orders. It does not change the price or the agent fills.
+    // The model thus has no market impact, no liquidity limit and no variable spread.
     std::vector<Order> bids; 
     std::vector<Order> asks;
     std::priority_queue<Order, std::vector<Order>, CompareOrder> latency_queue;
@@ -44,9 +50,22 @@ private:
     int current_market_price;
     double hawkes_excitation;
 
+    // Audit B1/B6: one seeded generator for each simulator.
+    // rand() is shared by the process and srand(time(0)) gives the same seed to workers that start in the same second.
+    std::mt19937 rng;
+    std::uniform_real_distribution<double> unit_dist{0.0, 1.0};
+
+    int rand_int(int low, int high) { // inclusive range, no modulo bias
+        return std::uniform_int_distribution<int>(low, high)(rng);
+    }
+
     const double base_mu = 0.02;           
-    const double alpha_jump = 0.15;        
+    // Audit C2: alpha_jump was 0.15. The code decays first and then adds alpha, so the
+    // branching ratio is n = alpha * decay / (1 - decay). With 0.15, n = 7.35 (unstable).
+    // The default 0.012 gives n = 0.588. The stable event rate is then base_mu / (1 - n) = 0.0485 per tick.
+    double alpha_jump;
     const double decay_rate = 0.98;        
+    long long event_count;
 
     void add_order(Order new_order) {
         if (new_order.is_buy) {
@@ -78,12 +97,15 @@ private:
     }
 
 public:
-    MarketSimulator() {
-        srand(time(0));
+    // Audit B1: the caller gives the seed. A fixed seed makes a run reproducible.
+    explicit MarketSimulator(std::uint32_t seed = 0, double alpha_jump = 0.012)
+        : rng(seed), alpha_jump(alpha_jump) {
         reset();
     }
 
-    void reset() {
+    // A negative seed keeps the current generator state. A seed >= 0 restarts it.
+    void reset(std::int64_t seed = -1) {
+        if (seed >= 0) rng.seed(static_cast<std::uint32_t>(seed));
         bids.clear();
         asks.clear();
         latency_queue = std::priority_queue<Order, std::vector<Order>, CompareOrder>();
@@ -91,7 +113,11 @@ public:
         order_id_counter = 1;
         current_market_price = 100;
         hawkes_excitation = 0.0;
+        event_count = 0;
     }
+
+    long long get_event_count() const { return event_count; }
+    double get_branching_ratio() const { return alpha_jump * decay_rate / (1.0 - decay_rate); }
 
     void place_order(int price, bool is_buy) {
         Order new_order;
@@ -111,21 +137,24 @@ public:
         // 1. Hawkes Process (Market Mutates)
         hawkes_excitation *= decay_rate; 
         double current_lambda = base_mu + hawkes_excitation;
+        // The intensity is used as a probability for each tick, so it must not exceed 1.
+        current_lambda = std::min(current_lambda, 1.0);
 
-        if ((rand() % 1000) / 1000.0 < current_lambda) {
+        if (unit_dist(rng) < current_lambda) {
             hawkes_excitation += alpha_jump;
-            current_market_price += ((rand() % 5) - 2); 
+            event_count++;
+            current_market_price += rand_int(-2, 2); 
             if (current_market_price < 1) current_market_price = 1;
             
-            int burst_orders = 2 + (rand() % 4); 
+            int burst_orders = rand_int(2, 5); 
             for (int i = 0; i < burst_orders; i++) {
                 Order dummy_order;
                 dummy_order.id = 999999; 
                 dummy_order.quantity = 10;
-                dummy_order.is_buy = (rand() % 2 == 0);
-                int spread = (rand() % 3) + 1;
+                dummy_order.is_buy = (rand_int(0, 1) == 0);
+                int spread = rand_int(1, 3);
                 dummy_order.price = dummy_order.is_buy ? (current_market_price - spread) : (current_market_price + spread);
-                dummy_order.expiration_time = current_time + 50 + (rand() % 250);
+                dummy_order.expiration_time = current_time + 50 + rand_int(0, 249);
                 add_order(dummy_order);
             }
         }
@@ -138,6 +167,7 @@ public:
             latency_queue.pop();
             
             // If it is the AI's order (not a dummy order), it executes at the CURRENT mutated price
+            // Audit C6: the order price is ignored. Agent orders are market orders with a full fill.
             if (ready_order.id != 999999) {
                 FillReport report;
                 report.order_id = ready_order.id;
@@ -146,6 +176,7 @@ public:
                 report.is_buy = ready_order.is_buy;
                 executed_fills.push_back(report);
             } else {
+                // Audit M1: this branch never runs. Random orders go to the book directly, not to the queue.
                 add_order(ready_order); 
             }
         }
@@ -154,6 +185,73 @@ public:
         if(current_time % 50 == 0) cleanup_expired_orders();
 
         return std::make_pair(current_market_price, executed_fills);
+    }
+};
+
+// --- BATCHED SIMULATORS ---
+// Steps N independent simulators in one call. A Python loop over N environments
+// cost about 70% of each training update, so the loop runs here instead.
+// Each simulator gives the same path as a MarketSimulator with the same seed.
+class MarketBatch {
+private:
+    std::vector<MarketSimulator> sims;
+
+public:
+    MarketBatch(int num_envs, double alpha_jump) {
+        sims.reserve(num_envs);
+        for (int i = 0; i < num_envs; i++) sims.emplace_back(0, alpha_jump);
+    }
+
+    int size() const { return static_cast<int>(sims.size()); }
+
+    // Restarts each simulator with its seed and advances one tick, as TradingEnvironment.reset() does.
+    py::array_t<int> reset(const std::vector<std::int64_t>& seeds) {
+        if (seeds.size() != sims.size()) throw std::invalid_argument("one seed is needed for each simulator");
+        py::array_t<int> prices(sims.size());
+        auto p = prices.mutable_unchecked<1>();
+        for (size_t i = 0; i < sims.size(); i++) {
+            sims[i].reset(seeds[i]);
+            p(i) = sims[i].step().first;
+        }
+        return prices;
+    }
+
+    // actions[i] is -1 (sell), 0 (hold) or +1 (buy). The order is placed before the tick, as in TradingEnvironment.step().
+    // Returns (price, buy_fills, sell_fills, buy_qty, sell_qty, buy_value, sell_value).
+    // buy_value and sell_value are the sums of execution_price * quantity.
+    py::tuple step(py::array_t<int, py::array::c_style | py::array::forcecast> actions,
+                   py::array_t<int, py::array::c_style | py::array::forcecast> order_prices) {
+        const size_t n = sims.size();
+        if (static_cast<size_t>(actions.size()) != n || static_cast<size_t>(order_prices.size()) != n)
+            throw std::invalid_argument("one action and one order price are needed for each simulator");
+        auto a = actions.unchecked<1>();
+        auto op = order_prices.unchecked<1>();
+
+        py::array_t<int> price(n), buy_fills(n), sell_fills(n), buy_qty(n), sell_qty(n);
+        py::array_t<double> buy_value(n), sell_value(n);
+        auto pr = price.mutable_unchecked<1>();
+        auto bf = buy_fills.mutable_unchecked<1>();
+        auto sf = sell_fills.mutable_unchecked<1>();
+        auto bq = buy_qty.mutable_unchecked<1>();
+        auto sq = sell_qty.mutable_unchecked<1>();
+        auto bv = buy_value.mutable_unchecked<1>();
+        auto sv = sell_value.mutable_unchecked<1>();
+
+        for (size_t i = 0; i < n; i++) {
+            if (a(i) == 1) sims[i].place_order(op(i), true);
+            else if (a(i) == -1) sims[i].place_order(op(i), false);
+
+            auto result = sims[i].step();
+            pr(i) = result.first;
+            bf(i) = sf(i) = bq(i) = sq(i) = 0;
+            bv(i) = sv(i) = 0.0;
+            for (const FillReport& fill : result.second) {
+                double value = static_cast<double>(fill.execution_price) * fill.quantity;
+                if (fill.is_buy) { bf(i)++; bq(i) += fill.quantity; bv(i) += value; }
+                else             { sf(i)++; sq(i) += fill.quantity; sv(i) += value; }
+            }
+        }
+        return py::make_tuple(price, buy_fills, sell_fills, buy_qty, sell_qty, buy_value, sell_value);
     }
 };
 
@@ -169,8 +267,16 @@ PYBIND11_MODULE(cpp_exchange, m) {
         .def_readonly("is_buy", &FillReport::is_buy);
 
     py::class_<MarketSimulator>(m, "MarketSimulator")
-        .def(py::init<>())
-        .def("reset", &MarketSimulator::reset)
+        .def(py::init<std::uint32_t, double>(), py::arg("seed") = 0, py::arg("alpha_jump") = 0.012)
+        .def("reset", &MarketSimulator::reset, py::arg("seed") = -1)
         .def("place_order", &MarketSimulator::place_order)
-        .def("step", &MarketSimulator::step);
+        .def("step", &MarketSimulator::step)
+        .def("get_event_count", &MarketSimulator::get_event_count)
+        .def("get_branching_ratio", &MarketSimulator::get_branching_ratio);
+
+    py::class_<MarketBatch>(m, "MarketBatch")
+        .def(py::init<int, double>(), py::arg("num_envs"), py::arg("alpha_jump") = 0.012)
+        .def("size", &MarketBatch::size)
+        .def("reset", &MarketBatch::reset, py::arg("seeds"))
+        .def("step", &MarketBatch::step, py::arg("actions"), py::arg("order_prices"));
 }

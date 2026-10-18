@@ -1,0 +1,8 @@
+# Versions verified on 2026-10-17 in a Linux cloud environment with Python 3.13 and g++ 13.3.
+# These are not proven to be the versions that made the thesis results. Those versions were not recorded.
+torch==2.14.1
+numpy==2.5.3
+matplotlib==3.11.2
+pybind11==3.1.0
+setuptools==84.0.0
+pytest==9.1.1

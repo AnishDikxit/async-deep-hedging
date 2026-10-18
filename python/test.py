@@ -2,16 +2,20 @@ import torch
 import numpy as np
 import matplotlib.pyplot as plt
 from environment import TradingEnvironment
+from evaluate import load_config
 
 # THE FIX: Import the Recurrent Brain
 from agent import PPOAgentLSTM 
 
-def test_agent():
+def test_agent(seed=None):
     print("Booting up the Asynchronous Evaluation Environment...")
-    env = TradingEnvironment()
+    # Audit C4: use the run configuration and a fixed test seed, so that the figure can be made again.
+    cfg = load_config("deep_hedging_config.json")
+    seed = cfg.test_seeds[0] if seed is None else seed
+    env = TradingEnvironment(cfg)
     
     # Instantiate the new LSTM brain
-    agent = PPOAgentLSTM() 
+    agent = PPOAgentLSTM(hidden_dim=cfg.hidden_dim, use_lstm=cfg.use_lstm) 
     
     try:
         agent.policy_network.load_state_dict(torch.load("deep_hedging_weights.pth"))
@@ -27,7 +31,7 @@ def test_agent():
     history_actions = []
     history_pnl = []
     
-    state = env.reset()
+    state = env.reset(seed=seed)
     
     # THE FIX: Initialize the LSTM's blank memory
     hidden = agent.get_initial_hidden()
@@ -42,19 +46,25 @@ def test_agent():
         with torch.no_grad():
             # THE FIX: Pass the hidden state in, and receive the updated hidden state back
             best_action, _, _, _, hidden = agent.select_action(state, hidden, test_mode=True)
+            best_action = int(best_action[0])
             
         history_actions.append(best_action)
         
         next_state, reward, done = env.step(best_action)
         
         # Calculate Mark-to-Market PnL
-        current_mtm_value = env.cash + (env.holdings * env.current_price)
-        history_pnl.append(current_mtm_value - env.starting_cash) 
+        # Audit C1: plot the implementation shortfall (MTM now minus MTM at reset).
+        # The thesis plotted MTM minus starting cash, which includes the initial inventory value.
+        history_pnl.append(env.implementation_shortfall()) 
         
         state = next_state
         
         if done:
-            print(f"Simulation Complete. Final MTM PnL: ${history_pnl[-1]:.2f}")
+            print(f"Simulation Complete (seed {seed}). Implementation shortfall: ${history_pnl[-1]:.2f}")
+            print(f"Legacy MTM PnL (includes initial inventory): ${env.legacy_mtm_pnl():.2f}")
+            # Audit C5: report the trades and their cost, and the penalty as a separate metric.
+            print(f"Orders sent: {sum(a != 0 for a in history_actions)} | Fills: {env.num_fills} | "
+                  f"Spread and fees: ${env.spread_cost:.2f} | Band penalty (not cash): {env.total_penalty:.2f}")
             break
             
     # --- GENERATE THE VISUALS ---
@@ -92,7 +102,7 @@ def test_agent():
     ax2.legend(loc='upper left')
     
     # --- Panel 3: Cumulative PnL ---
-    ax3.plot(history_pnl, color='purple', linewidth=1.5, label='Mark-to-Market PnL')
+    ax3.plot(history_pnl, color='purple', linewidth=1.5, label='Implementation Shortfall (MTM - initial MTM)')
     ax3.axhline(0, color='black', linestyle='-', alpha=0.5)
     
     ax3.set_xlabel('Time (Simulation Milliseconds)')
